@@ -1,0 +1,56 @@
+---
+- name: Deploy OpenTelemetry Agent to Alpine LXC containers
+  hosts: alpine_lxcs
+  become: true
+  vars:
+    otel_collector_version: "0.82.0"
+    otel_collector_endpoint: "infra-metrics1.home.seiffert.me:4317"
+    otel_script_path: "/etc/otel-agent-install.sh"
+    
+  tasks:
+    - name: Ensure required packages are installed
+      community.general.apk:
+        name:
+          - curl
+          - tar
+          - gzip
+          - supervisor
+          - wget
+        state: present
+        update_cache: yes
+      
+    - name: Create necessary directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "/etc/otel"
+        - "/var/log/otel"
+        - "/etc/supervisor.d"
+    
+    - name: Create OpenTelemetry collector installation script
+      template:
+        src: templates/otel-agent-install.sh.j2
+        dest: "{{ otel_script_path }}"
+        mode: '0755'
+      
+    - name: Execute installation script
+      command: "{{ otel_script_path }}"
+      register: install_result
+      changed_when: "'Collector binary installed' in install_result.stdout or 'OpenTelemetry Collector is running successfully' in install_result.stdout"
+      
+    - name: Check if OpenTelemetry agent is running
+      shell: supervisorctl status otel-collector | grep RUNNING
+      register: otel_status
+      changed_when: false
+      failed_when: false
+      
+    - name: Report installation status
+      debug:
+        msg: "OpenTelemetry agent installation status: {{ 'SUCCESS' if otel_status.rc == 0 else 'FAILED' }}"
+      
+    - name: Fail if installation was not successful
+      fail:
+        msg: "OpenTelemetry agent installation failed. Check the logs: cat /var/log/otel/collector.log"
+      when: otel_status.rc != 0

@@ -20,12 +20,6 @@
       register: alpine_update_result
       when: ansible_os_family == "Alpine"
       
-    # Replacing the unsupported cache_clean with a command
-    - name: Clean package cache (Alpine)
-      command: apk cache clean
-      when: ansible_os_family == "Alpine"
-      changed_when: true
-      
     # Debian-specific updates
     - name: Update package lists (Debian)
       apt:
@@ -73,4 +67,4 @@
       when: >
         ansible_os_family == "Debian" and 
         reboot_required is defined and 
-        reboot_required.stat.exist
+        reboot_required.stat.exists

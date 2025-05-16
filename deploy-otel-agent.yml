@@ -1,14 +1,15 @@
 ---
-- name: Deploy OpenTelemetry Agent to Alpine LXC containers
-  hosts: alpine
+- name: Deploy OpenTelemetry Agent to Alpine and Debian containers
+  hosts: alpine:debian
   become: true
   vars:
     otel_collector_version: "0.82.0"
     otel_collector_endpoint: "infra-metrics1.home.seiffert.me:4317"
     otel_script_path: "/etc/otel-agent-install.sh"
+    supervisor_config_path: "{{ '/etc/supervisor.d' if ansible_os_family == 'Alpine' else '/etc/supervisor/conf.d' }}"
     
   tasks:
-    - name: Ensure required packages are installed
+    - name: Ensure required packages are installed (Alpine)
       community.general.apk:
         name:
           - curl
@@ -18,8 +19,21 @@
           - wget
         state: present
         update_cache: yes
+      when: ansible_os_family == "Alpine"
       
-    - name: Create necessary directories
+    - name: Ensure required packages are installed (Debian)
+      apt:
+        name:
+          - curl
+          - tar
+          - gzip
+          - supervisor
+          - wget
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+      
+    - name: Create necessary directories (Common)
       file:
         path: "{{ item }}"
         state: directory
@@ -27,11 +41,24 @@
       loop:
         - "/etc/otel"
         - "/var/log/otel"
-        - "/etc/supervisor.d"
+        
+    - name: Create supervisor directory (Alpine)
+      file:
+        path: "/etc/supervisor.d"
+        state: directory
+        mode: '0755'
+      when: ansible_os_family == "Alpine"
+        
+    - name: Create supervisor directory (Debian)
+      file:
+        path: "/etc/supervisor/conf.d"
+        state: directory
+        mode: '0755'
+      when: ansible_os_family == "Debian"
     
     - name: Create OpenTelemetry collector installation script
       template:
-        src: templates/otel-agent-install.sh.j2
+        src: "templates/otel-agent-install-{{ ansible_os_family|lower }}.sh.j2"
         dest: "{{ otel_script_path }}"
         mode: '0755'
       
@@ -40,17 +67,35 @@
       register: install_result
       changed_when: "'Collector binary installed' in install_result.stdout or 'OpenTelemetry Collector is running successfully' in install_result.stdout"
       
-    - name: Check if OpenTelemetry agent is running
+    - name: Check if OpenTelemetry agent is running (Alpine)
       shell: supervisorctl status otel-collector | grep RUNNING
       register: otel_status
       changed_when: false
       failed_when: false
+      when: ansible_os_family == "Alpine"
+    
+    - name: Check if OpenTelemetry agent is running (Debian)
+      shell: supervisorctl status otel-collector | grep RUNNING
+      register: otel_status_debian
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "Debian"
+        
+    - name: Set status fact (Alpine)
+      set_fact:
+        agent_status: "{{ otel_status.rc }}"
+      when: ansible_os_family == "Alpine"
+    
+    - name: Set status fact (Debian)
+      set_fact:
+        agent_status: "{{ otel_status_debian.rc }}"
+      when: ansible_os_family == "Debian"
       
     - name: Report installation status
       debug:
-        msg: "OpenTelemetry agent installation status: {{ 'SUCCESS' if otel_status.rc == 0 else 'FAILED' }}"
+        msg: "OpenTelemetry agent installation status: {{ 'SUCCESS' if agent_status == 0 else 'FAILED' }}"
       
     - name: Fail if installation was not successful
       fail:
         msg: "OpenTelemetry agent installation failed. Check the logs: cat /var/log/otel/collector.log"
-      when: otel_status.rc != 0
+      when: agent_status != 0

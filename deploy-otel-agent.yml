@@ -1,6 +1,6 @@
 ---
 - name: Deploy OpenTelemetry Agent to Alpine LXC containers
-  hosts: all
+  hosts: alpine
   become: true
   vars:
     otel_collector_version: "0.82.0"

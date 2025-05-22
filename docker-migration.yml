@@ -1,39 +1,51 @@
 ---
 - name: Migrate Docker from Alpine to Debian LXCs
-  hosts: debian_migration_targets
+  hosts: all
   gather_facts: yes
   vars:
     docker_path: "/var/docker"
     ssh_key_path: "/root/.ssh/id_rsa"
     
   tasks:
-    - name: Validate prerequisites
+    - name: Validate survey variables
       block:
-        - name: Check if alpine_source is defined
+        - name: Check if source_machine is provided
           fail:
-            msg: "alpine_source must be defined for {{ inventory_hostname }} in inventory"
-          when: alpine_source is not defined
+            msg: "Source machine must be provided via Survey variable 'source_machine'"
+          when: source_machine is not defined or source_machine == ''
+          run_once: true
 
-        - name: Check if SSH key exists
-          stat:
-            path: "{{ ssh_key_path }}"
-          register: ssh_key_stat
-          
-        - name: Fail if SSH key missing
+        - name: Check if destination_machine is provided
           fail:
-            msg: "SSH key not found at {{ ssh_key_path }}. Run SSH key deployment first."
-          when: not ssh_key_stat.stat.exists
+            msg: "Destination machine must be provided via Survey variable 'destination_machine'"
+          when: destination_machine is not defined or destination_machine == ''
+          run_once: true
+
+        - name: Filter to run only on destination machine
+          meta: end_host
+          when: inventory_hostname != destination_machine
 
     - name: Display migration info
       debug:
         msg: |
           ================================
-          Docker Migration
+          Docker Migration (Selective Sync)
           ================================
-          Source: {{ alpine_source }}
-          Target: {{ inventory_hostname }}
+          Source: {{ source_machine }} (Alpine)
+          Target: {{ destination_machine }} (Debian)
           Docker Path: {{ docker_path }}
+          Migration Type: Preserve existing containers
           ================================
+
+    - name: Check if SSH key exists
+      stat:
+        path: "{{ ssh_key_path }}"
+      register: ssh_key_stat
+      
+    - name: Fail if SSH key missing
+      fail:
+        msg: "SSH key not found at {{ ssh_key_path }}. Run SSH key deployment first."
+      when: not ssh_key_stat.stat.exists
 
     - name: Test connectivity to Alpine source
       command: >
@@ -41,7 +53,7 @@
         -o StrictHostKeyChecking=no
         -o ConnectTimeout=10
         -o BatchMode=yes
-        ansible@{{ alpine_source }}
+        ansible@{{ source_machine }}
         'echo "Connection successful"'
       register: connectivity_test
       changed_when: false
@@ -52,7 +64,7 @@
         -o StrictHostKeyChecking=no
         -o ConnectTimeout=10
         -o BatchMode=yes
-        ansible@{{ alpine_source }}
+        ansible@{{ source_machine }}
         'sudo rc-service docker stop'
       register: alpine_docker_stop
       ignore_errors: yes
@@ -66,26 +78,42 @@
 
     - name: Create backup of existing docker directory
       shell: |
-        if [ -d {{ docker_path }} ]; then
-          cp -r {{ docker_path }} {{ docker_path }}.backup.$(date +%Y%m%d_%H%M%S)
-          echo "Backup created: {{ docker_path }}.backup.$(date +%Y%m%d_%H%M%S)"
-        else
-          echo "No existing docker directory to backup"
-        fi
+        echo "Skipping backup - using selective sync to preserve existing containers"
+        echo "backup_created=none"
       register: backup_result
-      
+      tags: backup
+
     - name: Display backup result
       debug:
         msg: "{{ backup_result.stdout }}"
 
-    - name: Synchronize docker directory from Alpine source (using sudo)
+    - name: Ensure docker directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ docker_path }}/stacks"
+        - "{{ docker_path }}/data"
+
+    - name: Synchronize new stacks from Alpine source (selective sync)
       shell: |
-        rsync -avz --progress --delete \
+        rsync -avz --progress \
           -e "ssh -i {{ ssh_key_path }} -o StrictHostKeyChecking=no" \
           --rsync-path="sudo rsync" \
-          ansible@{{ alpine_source }}:{{ docker_path }}/ {{ docker_path }}/
-      register: rsync_result
-      
+          --ignore-existing \
+          ansible@{{ source_machine }}:{{ docker_path }}/stacks/ {{ docker_path }}/stacks/
+      register: stacks_sync_result
+
+    - name: Synchronize new data from Alpine source (selective sync)
+      shell: |
+        rsync -avz --progress \
+          -e "ssh -i {{ ssh_key_path }} -o StrictHostKeyChecking=no" \
+          --rsync-path="sudo rsync" \
+          --ignore-existing \
+          ansible@{{ source_machine }}:{{ docker_path }}/data/ {{ docker_path }}/data/
+      register: data_sync_result
+
     - name: Display sync summary
       debug:
         msg: |
@@ -106,7 +134,7 @@
         -o StrictHostKeyChecking=no
         -o ConnectTimeout=10
         -o BatchMode=yes
-        ansible@{{ alpine_source }}
+        ansible@{{ source_machine }}
         'sudo rc-service docker start'
       register: alpine_docker_start
       ignore_errors: yes
@@ -141,46 +169,45 @@
           {% endfor %}
       when: stack_directories.files is defined
 
-    - name: Start Docker Compose stacks
-      block:
-        - name: Check for compose.yaml in each stack directory
-          stat:
-            path: "{{ item.path }}/compose.yaml"
-          register: compose_files
-          loop: "{{ stack_directories.files }}"
-          when: stack_directories.files is defined
+    - name: Check for compose.yaml in each stack directory
+      stat:
+        path: "{{ item.path }}/compose.yaml"
+      register: compose_files
+      loop: "{{ stack_directories.files }}"
+      when: stack_directories.files is defined
 
-        - name: Start each stack with compose.yaml
-          shell: |
-            cd {{ item.item.path }}
-            docker compose up -d
-          register: compose_results
-          loop: "{{ compose_files.results }}"
-          when: 
-            - stack_directories.files is defined
-            - item.stat.exists
-          ignore_errors: yes
+    - name: Start each stack with compose.yaml
+      shell: |
+        cd {{ item.item.path }}
+        docker compose up -d
+      register: compose_results
+      loop: "{{ compose_files.results }}"
+      when: 
+        - stack_directories.files is defined
+        - item.stat.exists
+      ignore_errors: yes
 
-        - name: Display stack startup results
-          debug:
-            msg: |
-              Stack: {{ item.item.item.path | basename }}
-              Status: {% if item.rc == 0 %}✓ Started successfully{% else %}✗ Failed to start{% endif %}
-              {% if item.rc != 0 %}
-              Error: {{ item.stderr | default('Unknown error') }}
-              {% endif %}
-          loop: "{{ compose_results.results }}"
-          when: compose_results.results is defined
+    - name: Display stack startup results
+      debug:
+        msg: |
+          Stack: {{ item.item.item.path | basename }}
+          Status: {% if item.rc == 0 %}✓ Started successfully{% else %}✗ Failed to start{% endif %}
+          {% if item.rc != 0 %}
+          Error: {{ item.stderr | default('Unknown error') }}
+          {% endif %}
+      loop: "{{ compose_results.results }}"
+      when: compose_results.results is defined
 
     - name: Migration summary
       debug:
         msg: |
           ================================
-          Migration Summary for {{ inventory_hostname }}
+          Migration Summary for {{ destination_machine }}
           ================================
-          Source: {{ alpine_source }}
-          Docker sync: {% if rsync_result.rc == 0 %}✓ Success{% else %}✗ Failed{% endif %}
-          Docker service: {% if docker_version is defined %}✓ Running{% else %}✗ Not running{% endif %}
+          Source: {{ source_machine }}
+          Docker sync: {{ 'Success' if (stacks_sync_result.rc == 0 and data_sync_result.rc == 0) else 'Failed' }}
+          Docker service: {{ '✓ Running' if docker_version is defined else '✗ Not running' }}
           Stacks found: {{ stack_directories.files | length if stack_directories.files is defined else 0 }}
           Stacks started: {{ compose_results.results | selectattr('rc', 'equalto', 0) | list | length if compose_results.results is defined else 0 }}
+          Migration Type: ✓ Selective (existing containers preserved)
           ================================

@@ -114,7 +114,7 @@
         -o ConnectTimeout=10
         -o BatchMode=yes
         ansible@{{ alpine_source }}
-        'sudo docker --version && sudo systemctl is-active docker'
+        'sudo docker --version && sudo rc-service docker status'
       register: alpine_docker_test
       ignore_errors: yes
       changed_when: false

@@ -2,19 +2,22 @@
 - name: Distribute SSH private key to Debian LXCs and test Alpine connectivity
   hosts: debian_migration_targets
   gather_facts: no
-  vars_prompt:
-    - name: ssh_private_key_content
-      prompt: |
-        
-        Please paste your SSH private key content (including -----BEGIN and -----END lines)
-        Press Enter after pasting, then press Enter again on empty line to continue
-      private: yes
-      confirm: no
       
   vars:
     target_key_path: "~/.ssh/id_rsa"
+    # Get SSH key from Semaphore environment variable
+    ssh_private_key_content: "{{ lookup('env', 'ssh_private_key') | default('') }}"
     
   tasks:
+    - name: Check if SSH private key is provided via environment variable
+      fail:
+        msg: |
+          SSH private key must be provided via 'ssh_private_key' environment variable.
+          In Semaphore UI: Ensure environment variable 'ssh_private_key' is set with your private key content.
+          Command line: ssh_private_key='$(cat ~/.ssh/id_rsa)' ansible-playbook ...
+      when: ssh_private_key_content == ''
+      run_once: true
+
     - name: Validate private key format
       fail:
         msg: "Invalid SSH private key format. Must contain BEGIN and END markers."

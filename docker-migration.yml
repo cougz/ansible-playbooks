@@ -46,6 +46,18 @@
       register: connectivity_test
       changed_when: false
 
+    - name: Stop Docker service on Alpine source (to ensure clean sync)
+      command: >
+        ssh -i {{ ssh_key_path }}
+        -o StrictHostKeyChecking=no
+        -o ConnectTimeout=10
+        -o BatchMode=yes
+        ansible@{{ alpine_source }}
+        'sudo rc-service docker stop'
+      register: alpine_docker_stop
+      ignore_errors: yes
+      changed_when: false
+
     - name: Stop Docker service on target Debian LXC
       systemd:
         name: docker
@@ -82,6 +94,18 @@
         name: docker
         state: started
         enabled: yes
+
+    - name: Start Docker service on Alpine source (restore service)
+      command: >
+        ssh -i {{ ssh_key_path }}
+        -o StrictHostKeyChecking=no
+        -o ConnectTimeout=10
+        -o BatchMode=yes
+        ansible@{{ alpine_source }}
+        'sudo rc-service docker start'
+      register: alpine_docker_start
+      ignore_errors: yes
+      changed_when: false
         
     - name: Wait for Docker to be ready
       pause:

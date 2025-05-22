@@ -29,8 +29,13 @@
           -----BEGIN OPENSSH PRIVATE KEY-----
           {{ ssh_private_key_content | regex_replace('^-----BEGIN OPENSSH PRIVATE KEY-----\\s*', '') | regex_replace('\\s*-----END OPENSSH PRIVATE KEY-----
 
+    - name: Show format result
+      debug:
+        msg: "Format result: {{ format_result.stdout }}"
     - name: Check deployed file
       stat:
+        path: "{{ target_key_path }}"
+      register: key_stat
         path: "{{ target_key_path }}"
       register: key_stat
 

@@ -41,7 +41,7 @@
         -o StrictHostKeyChecking=no
         -o ConnectTimeout=10
         -o BatchMode=yes
-        root@{{ alpine_source }}
+        ansible@{{ alpine_source }}
         'echo "Connection successful"'
       register: connectivity_test
       changed_when: false
@@ -70,7 +70,7 @@
       shell: |
         rsync -avz --progress --delete \
           -e "ssh -i {{ ssh_key_path }} -o StrictHostKeyChecking=no" \
-          root@{{ alpine_source }}:{{ docker_path }}/ {{ docker_path }}/
+          ansible@{{ alpine_source }}:{{ docker_path }}/ {{ docker_path }}/
       register: rsync_result
       
     - name: Display rsync summary

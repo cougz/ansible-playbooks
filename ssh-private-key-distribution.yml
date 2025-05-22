@@ -81,7 +81,6 @@
       register: key_validation
       ignore_errors: yes
       changed_when: false
-      no_log: true
 
     - name: Test SSH connectivity to Alpine source as ansible user
       command: >
@@ -94,6 +93,7 @@
       register: alpine_ssh_test
       ignore_errors: yes
       changed_when: false
+      when: key_validation is defined and key_validation.rc == 0
 
     - name: Test sudo access on Alpine source
       command: >
@@ -106,6 +106,7 @@
       register: alpine_sudo_test
       ignore_errors: yes
       changed_when: false
+      when: alpine_ssh_test is defined and alpine_ssh_test.rc == 0
 
     - name: Test root SSH connectivity to Alpine source (fallback)
       command: >
@@ -127,18 +128,18 @@
           Results for {{ inventory_hostname }}
           ================================
           Key deployed: {% if key_deployment.changed %}✓ Success{% else %}Already present{% endif %}
-          Key valid: {% if key_validation.rc == 0 %}✓ Valid{% else %}✗ Invalid{% endif %}
+          Key valid: {% if key_validation is defined and key_validation.rc == 0 %}✓ Valid{% elif key_validation is defined %}✗ Invalid{% else %}⚠ Not tested{% endif %}
           Key permissions: {{ remote_key_stat.stat.mode | default('unknown') }}
           
           Alpine Source Tests ({{ alpine_source }}):
           --------------------------------
-          SSH as ansible user: {% if alpine_ssh_test.rc == 0 %}✓ Success{% else %}✗ Failed{% endif %}
-          Sudo access: {% if alpine_sudo_test.rc == 0 %}✓ Success{% else %}✗ Failed{% endif %}
+          SSH as ansible user: {% if alpine_ssh_test is defined and alpine_ssh_test.rc == 0 %}✓ Success{% elif alpine_ssh_test is defined %}✗ Failed{% else %}⚠ Not tested{% endif %}
+          Sudo access: {% if alpine_sudo_test is defined and alpine_sudo_test.rc == 0 %}✓ Success{% elif alpine_sudo_test is defined %}✗ Failed{% else %}⚠ Not tested{% endif %}
           {% if alpine_root_ssh_test is defined %}
           SSH as root (fallback): {% if alpine_root_ssh_test.rc == 0 %}✓ Success{% else %}✗ Failed{% endif %}
           {% endif %}
           
-          Migration readiness: {% if alpine_ssh_test.rc == 0 and alpine_sudo_test.rc == 0 %}✓ Ready{% elif alpine_root_ssh_test is defined and alpine_root_ssh_test.rc == 0 %}⚠ Root only{% else %}✗ Not ready{% endif %}
+          Migration readiness: {% if alpine_ssh_test is defined and alpine_ssh_test.rc == 0 and alpine_sudo_test is defined and alpine_sudo_test.rc == 0 %}✓ Ready{% elif alpine_root_ssh_test is defined and alpine_root_ssh_test.rc == 0 %}⚠ Root only{% else %}⚠ Tests skipped or failed{% endif %}
           ================================
 
     - name: Summary of any connection failures
@@ -147,12 +148,12 @@
           WARNING: Connection issues detected for {{ inventory_hostname }}
           Alpine source: {{ alpine_source }}
           
-          ansible user SSH: {{ alpine_ssh_test.stderr | default('Connection failed') }}
-          sudo access: {{ alpine_sudo_test.stderr | default('Sudo failed') }}
+          ansible user SSH: {{ alpine_ssh_test.stderr | default('Connection failed or not tested') }}
+          sudo access: {{ alpine_sudo_test.stderr | default('Sudo failed or not tested') }}
           
           Please verify:
           1. SSH key is correct
           2. ansible user exists on {{ alpine_source }}
           3. ansible user has sudo privileges
           4. SSH service is running on {{ alpine_source }}
-      when: alpine_ssh_test.rc != 0 or alpine_sudo_test.rc != 0
+      when: (alpine_ssh_test is defined and alpine_ssh_test.rc != 0) or (alpine_sudo_test is defined and alpine_sudo_test.rc != 0)

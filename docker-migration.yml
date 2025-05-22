@@ -1,7 +1,7 @@
 ---
 - name: Migrate Docker from Alpine to Debian LXCs
-  hosts: all
-  gather_facts: yes
+  hosts: debian_migration_targets
+  gather_facts: no
   vars:
     docker_path: "/var/docker"
     ssh_key_path: "/root/.ssh/id_rsa"
@@ -24,6 +24,9 @@
         - name: Filter to run only on destination machine
           meta: end_host
           when: inventory_hostname != destination_machine
+
+    - name: Gather facts for destination machine only
+      setup:
 
     - name: Display migration info
       debug:

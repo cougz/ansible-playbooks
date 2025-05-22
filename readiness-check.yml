@@ -284,7 +284,7 @@
           failed_when: false
 
         - name: Check apt sources configuration
-          command: find /etc/apt/sources.list* -type f
+          shell: find /etc/apt/sources.list* -type f 2>/dev/null || echo "No sources.list files found"
           register: apt_sources
           changed_when: false
 

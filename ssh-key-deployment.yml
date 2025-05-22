@@ -23,29 +23,35 @@
           First 50 chars: {{ ssh_private_key_content[:50] }}
           Last 50 chars: {{ ssh_private_key_content[-50:] }}
 
-    - name: Format SSH key properly using Python
-      shell: |
-        python3 -c "
-import re
-import sys
+    - name: Create Python script to format SSH key
+      copy:
+        content: |
+          #!/usr/bin/env python3
+          import re
+          import sys
+          
+          key_content = sys.argv[1]
+          output_file = sys.argv[2]
+          
+          # Remove BEGIN/END markers and all whitespace
+          key_body = re.sub(r'-----BEGIN OPENSSH PRIVATE KEY-----', '', key_content)
+          key_body = re.sub(r'-----END OPENSSH PRIVATE KEY-----', '', key_body)
+          key_body = re.sub(r'\s+', '', key_body)
+          
+          # Write properly formatted key
+          with open(output_file, 'w') as f:
+              f.write('-----BEGIN OPENSSH PRIVATE KEY-----\n')
+              # Split into 64-character lines
+              for i in range(0, len(key_body), 64):
+                  f.write(key_body[i:i+64] + '\n')
+              f.write('-----END OPENSSH PRIVATE KEY-----\n')
+          
+          print('Key formatted successfully')
+        dest: /tmp/format_ssh_key.py
+        mode: '0755'
 
-key_content = '''{{ ssh_private_key_content }}'''
-
-# Remove BEGIN/END markers and all whitespace
-key_body = re.sub(r'-----BEGIN OPENSSH PRIVATE KEY-----', '', key_content)
-key_body = re.sub(r'-----END OPENSSH PRIVATE KEY-----', '', key_body)
-key_body = re.sub(r'\s+', '', key_body)
-
-# Write properly formatted key
-with open('{{ target_key_path }}', 'w') as f:
-    f.write('-----BEGIN OPENSSH PRIVATE KEY-----\n')
-    # Split into 64-character lines
-    for i in range(0, len(key_body), 64):
-        f.write(key_body[i:i+64] + '\n')
-    f.write('-----END OPENSSH PRIVATE KEY-----\n')
-
-print('Key formatted successfully')
-"
+    - name: Format SSH key using Python script
+      command: python3 /tmp/format_ssh_key.py "{{ ssh_private_key_content }}" "{{ target_key_path }}"
       register: format_result
 
     - name: Set proper permissions on SSH key

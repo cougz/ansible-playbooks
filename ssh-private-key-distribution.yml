@@ -1,0 +1,84 @@
+---
+- name: Distribute SSH private key to all servers via terminal input
+  hosts: all
+  gather_facts: no
+  vars_prompt:
+    - name: ssh_private_key_content
+      prompt: |
+        
+        Please paste your SSH private key content (including -----BEGIN and -----END lines)
+        Press Enter after pasting, then press Enter again on empty line to continue
+      private: yes
+      confirm: no
+      
+  vars:
+    target_key_path: "~/.ssh/id_rsa"
+    
+  tasks:
+    - name: Validate private key format
+      fail:
+        msg: "Invalid SSH private key format. Must contain BEGIN and END markers."
+      when: |
+        'BEGIN' not in ssh_private_key_content or 
+        'END' not in ssh_private_key_content
+      run_once: true
+
+    - name: Test connectivity to server
+      ping:
+
+    - name: Display deployment target info
+      debug:
+        msg: |
+          Deploying SSH key to: {{ inventory_hostname }}
+          Target path: {{ target_key_path }}
+          User: {{ ansible_user | default('root') }}
+
+    - name: Ensure .ssh directory exists with correct permissions
+      file:
+        path: "{{ target_key_path | dirname }}"
+        state: directory
+        mode: '0700'
+        owner: "{{ ansible_user | default('root') }}"
+        group: "{{ ansible_user | default('root') }}"
+
+    - name: Backup existing SSH key if present
+      copy:
+        src: "{{ target_key_path }}"
+        dest: "{{ target_key_path }}.backup.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+        mode: '0600'
+      ignore_errors: yes
+
+    - name: Deploy SSH private key from terminal input
+      copy:
+        content: "{{ ssh_private_key_content }}"
+        dest: "{{ target_key_path }}"
+        mode: '0600'
+        owner: "{{ ansible_user | default('root') }}"
+        group: "{{ ansible_user | default('root') }}"
+      register: key_deployment
+      no_log: true
+
+    - name: Verify key file exists and has correct permissions
+      stat:
+        path: "{{ target_key_path }}"
+      register: remote_key_stat
+
+    - name: Test SSH key validity
+      command: ssh-keygen -y -f {{ target_key_path }}
+      register: key_validation
+      ignore_errors: yes
+      changed_when: false
+      no_log: true
+
+    - name: Display deployment results
+      debug:
+        msg: |
+          ================================
+          Server: {{ inventory_hostname }}
+          ================================
+          Key deployed: {% if key_deployment.changed %}✓ Success{% else %}Already present{% endif %}
+          Key valid: {% if key_validation.rc == 0 %}✓ Valid{% else %}✗ Invalid{% endif %}
+          Permissions: {{ remote_key_stat.stat.mode }}
+          Size: {{ remote_key_stat.stat.size }} bytes
+          ================================

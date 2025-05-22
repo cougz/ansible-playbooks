@@ -1,7 +1,7 @@
 ---
 - name: Distribute SSH private key to Debian LXCs and test Alpine connectivity
   hosts: debian_migration_targets
-  gather_facts: no
+  gather_facts: yes
       
   vars:
     target_key_path: "~/.ssh/id_rsa"
@@ -55,10 +55,11 @@
     - name: Backup existing SSH key if present
       copy:
         src: "{{ target_key_path }}"
-        dest: "{{ target_key_path }}.backup.{{ ansible_date_time.epoch }}"
+        dest: "{{ target_key_path }}.backup.{{ ansible_date_time.epoch | default(ansible_date_time.year + ansible_date_time.month + ansible_date_time.day + ansible_date_time.hour + ansible_date_time.minute) }}"
         remote_src: yes
         mode: '0600'
       ignore_errors: yes
+      when: ansible_date_time is defined
 
     - name: Deploy SSH private key to Debian LXC
       copy:
@@ -127,7 +128,7 @@
           ================================
           Key deployed: {% if key_deployment.changed %}✓ Success{% else %}Already present{% endif %}
           Key valid: {% if key_validation.rc == 0 %}✓ Valid{% else %}✗ Invalid{% endif %}
-          Key permissions: {{ remote_key_stat.stat.mode }}
+          Key permissions: {{ remote_key_stat.stat.mode | default('unknown') }}
           
           Alpine Source Tests ({{ alpine_source }}):
           --------------------------------

@@ -86,9 +86,13 @@
           ansible@{{ alpine_source }}:{{ docker_path }}/ {{ docker_path }}/
       register: rsync_result
       
-    - name: Display rsync summary
+    - name: Display sync summary
       debug:
-        msg: "Rsync completed. Return code: {{ rsync_result.rc }}"
+        msg: |
+          Selective sync completed:
+          - Stacks: {{ 'Success' if stacks_sync_result.rc == 0 else 'Failed' }}
+          - Data: {{ 'Success' if data_sync_result.rc == 0 else 'Failed' }}
+          - Existing containers preserved
 
     - name: Start Docker service on target
       systemd:

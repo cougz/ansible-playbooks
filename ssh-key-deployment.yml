@@ -5,7 +5,6 @@
       
   vars:
     target_key_path: "/root/.ssh/id_rsa"
-    # Survey variable will be available directly as ssh_private_key_content
     
   tasks:
     - name: Check if Survey variable is provided
@@ -17,68 +16,46 @@
     - name: Check survey variable length
       debug:
         msg: "SSH key survey var length: {{ ssh_private_key_content | length }}"
+
     - name: Show first and last few characters
       debug:
         msg: |
           First 50 chars: {{ ssh_private_key_content[:50] }}
           Last 50 chars: {{ ssh_private_key_content[-50:] }}
 
-    - name: Deploy SSH key with proper line breaks
-      copy:
-        content: |
-          -----BEGIN OPENSSH PRIVATE KEY-----
-          {{ ssh_private_key_content | regex_replace('^-----BEGIN OPENSSH PRIVATE KEY-----\\s*', '') | regex_replace('\\s*-----END OPENSSH PRIVATE KEY-----
+    - name: Format SSH key properly using Python
+      shell: |
+        python3 -c "
+import re
+import sys
+
+key_content = '''{{ ssh_private_key_content }}'''
+
+# Remove BEGIN/END markers and all whitespace
+key_body = re.sub(r'-----BEGIN OPENSSH PRIVATE KEY-----', '', key_content)
+key_body = re.sub(r'-----END OPENSSH PRIVATE KEY-----', '', key_body)
+key_body = re.sub(r'\s+', '', key_body)
+
+# Write properly formatted key
+with open('{{ target_key_path }}', 'w') as f:
+    f.write('-----BEGIN OPENSSH PRIVATE KEY-----\n')
+    # Split into 64-character lines
+    for i in range(0, len(key_body), 64):
+        f.write(key_body[i:i+64] + '\n')
+    f.write('-----END OPENSSH PRIVATE KEY-----\n')
+
+print('Key formatted successfully')
+"
+      register: format_result
+
+    - name: Set proper permissions on SSH key
+      file:
+        path: "{{ target_key_path }}"
+        mode: '0600'
 
     - name: Show format result
       debug:
         msg: "Format result: {{ format_result.stdout }}"
-    - name: Check deployed file
-      stat:
-        path: "{{ target_key_path }}"
-      register: key_stat
-        path: "{{ target_key_path }}"
-      register: key_stat
-
-    - name: Show file info
-      debug:
-        msg: |
-          File exists: {{ key_stat.stat.exists }}
-          File size: {{ key_stat.stat.size }}
-          File mode: {{ key_stat.stat.mode }}
-
-    - name: Show first few lines of deployed key
-      shell: head -n 3 {{ target_key_path }}
-      register: key_head
-      ignore_errors: yes
-
-    - name: Show last few lines of deployed key  
-      shell: tail -n 3 {{ target_key_path }}
-      register: key_tail
-      ignore_errors: yes
-
-    - name: Display key file content check
-      debug:
-        msg: |
-          First 3 lines:
-          {{ key_head.stdout }}
-          
-          Last 3 lines:
-          {{ key_tail.stdout }}
-
-    - name: Test key with ssh-keygen
-      command: ssh-keygen -y -f {{ target_key_path }}
-      register: key_test
-      ignore_errors: yes
-
-    - name: Show key test results
-      debug:
-        msg: |
-          Return code: {{ key_test.rc }}
-          Stdout: {{ key_test.stdout }}
-          Stderr: {{ key_test.stderr }}, '') | regex_replace('\\s+', '\n') | regex_replace('\n+', '\n') }}
-          -----END OPENSSH PRIVATE KEY-----
-        dest: "{{ target_key_path }}"
-        mode: '0600'
 
     - name: Check deployed file
       stat:

@@ -310,11 +310,71 @@
       changed_when: false
       when: docker_check.rc == 0
 
-    - name: Add container runtime results
+    - name: Test Docker functionality
+      block:
+        - name: Check Docker daemon accessibility
+          command: docker info
+          register: docker_info
+          changed_when: false
+          failed_when: false
+
+        - name: Test Docker pull capability (small test image)
+          command: docker pull hello-world:latest
+          register: docker_pull_test
+          changed_when: false
+          failed_when: false
+          timeout: 30
+
+        - name: Test Docker run capability
+          command: docker run --rm hello-world
+          register: docker_run_test
+          changed_when: false
+          failed_when: false
+          timeout: 30
+
+        - name: Clean up test image
+          command: docker rmi hello-world:latest
+          changed_when: false
+          failed_when: false
+          when: docker_pull_test.rc == 0
+
+        - name: Check Docker disk usage
+          command: docker system df
+          register: docker_disk_usage
+          changed_when: false
+          failed_when: false
+
+        - name: Check Docker network functionality
+          command: docker network ls
+          register: docker_networks
+          changed_when: false
+          failed_when: false
+
+        - name: Check Docker volumes
+          command: docker volume ls
+          register: docker_volumes
+          changed_when: false
+          failed_when: false
+
+        - name: Check running containers
+          command: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          register: docker_containers
+          changed_when: false
+          failed_when: false
+
+      when: docker_check.rc == 0 and docker_service_check is defined and docker_service_check.stdout | int > 0
+
+    - name: Add comprehensive Docker results
       set_fact:
         check_results: "{{ check_results + [
           {'check': 'Docker Runtime', 'status': 'PASS' if docker_check.rc == 0 else 'INFO', 'details': docker_check.stdout if docker_check.rc == 0 else 'Docker not installed'},
-          {'check': 'Docker Service', 'status': 'PASS' if (docker_service_check is defined and docker_service_check.stdout | int > 0) else 'INFO', 'details': 'Docker service active' if (docker_service_check is defined and docker_service_check.stdout | int > 0) else 'Docker service not active/installed'}
+          {'check': 'Docker Service', 'status': 'PASS' if (docker_service_check is defined and docker_service_check.stdout | int > 0) else 'INFO', 'details': 'Docker service active' if (docker_service_check is defined and docker_service_check.stdout | int > 0) else 'Docker service not active/installed'},
+          {'check': 'Docker Daemon Access', 'status': 'PASS' if (docker_info is defined and docker_info.rc == 0) else 'WARN' if docker_check.rc == 0 else 'INFO', 'details': 'Docker daemon accessible' if (docker_info is defined and docker_info.rc == 0) else 'Cannot access Docker daemon' if docker_check.rc == 0 else 'Docker not available'},
+          {'check': 'Docker Pull Test', 'status': 'PASS' if (docker_pull_test is defined and docker_pull_test.rc == 0) else 'WARN' if docker_check.rc == 0 else 'INFO', 'details': 'Can pull images from registry' if (docker_pull_test is defined and docker_pull_test.rc == 0) else 'Cannot pull images' if docker_check.rc == 0 else 'Docker not available'},
+          {'check': 'Docker Run Test', 'status': 'PASS' if (docker_run_test is defined and docker_run_test.rc == 0) else 'WARN' if docker_check.rc == 0 else 'INFO', 'details': 'Can run containers successfully' if (docker_run_test is defined and docker_run_test.rc == 0) else 'Cannot run containers' if docker_check.rc == 0 else 'Docker not available'},
+          {'check': 'Docker Networks', 'status': 'INFO', 'details': (docker_networks.stdout_lines | length - 1) | string + ' networks configured' if (docker_networks is defined and docker_networks.rc == 0) else 'Network info unavailable'},
+          {'check': 'Docker Volumes', 'status': 'INFO', 'details': (docker_volumes.stdout_lines | length - 1) | string + ' volumes present' if (docker_volumes is defined and docker_volumes.rc == 0) else 'Volume info unavailable'},
+          {'check': 'Running Containers', 'status': 'INFO', 'details': (docker_containers.stdout_lines | length - 1) | string + ' containers running' if (docker_containers is defined and docker_containers.rc == 0) else 'Container info unavailable'}
         ] }}"
 
     # Time synchronization check

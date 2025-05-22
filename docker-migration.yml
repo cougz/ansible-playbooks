@@ -78,10 +78,11 @@
       debug:
         msg: "{{ backup_result.stdout }}"
 
-    - name: Synchronize docker directory from Alpine source
+    - name: Synchronize docker directory from Alpine source (using sudo)
       shell: |
         rsync -avz --progress --delete \
           -e "ssh -i {{ ssh_key_path }} -o StrictHostKeyChecking=no" \
+          --rsync-path="sudo rsync" \
           ansible@{{ alpine_source }}:{{ docker_path }}/ {{ docker_path }}/
       register: rsync_result
       

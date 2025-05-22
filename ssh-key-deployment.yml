@@ -5,26 +5,29 @@
       
   vars:
     target_key_path: "/root/.ssh/id_rsa"
-    ssh_private_key_content: "{{ lookup('env', 'ssh_private_key') | default('') }}"
+    # Survey variable will be available directly as ssh_private_key_content
     
   tasks:
-    - name: Check if environment variable is set
-      debug:
-        msg: "SSH key env var length: {{ ssh_private_key_content | length }}"
+    - name: Check if Survey variable is provided
+      fail:
+        msg: "SSH private key must be provided via Survey variable 'ssh_private_key_content'"
+      when: ssh_private_key_content is not defined or ssh_private_key_content == ''
+      run_once: true
 
+    - name: Check survey variable length
+      debug:
+        msg: "SSH key survey var length: {{ ssh_private_key_content | length }}"
     - name: Show first and last few characters
       debug:
         msg: |
           First 50 chars: {{ ssh_private_key_content[:50] }}
           Last 50 chars: {{ ssh_private_key_content[-50:] }}
-      when: ssh_private_key_content != ''
 
     - name: Deploy SSH key
       copy:
         content: "{{ ssh_private_key_content }}"
         dest: "{{ target_key_path }}"
         mode: '0600'
-      when: ssh_private_key_content != ''
 
     - name: Check deployed file
       stat:

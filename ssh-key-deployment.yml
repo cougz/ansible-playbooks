@@ -1,6 +1,6 @@
 ---
-- name: Simple SSH key deployment test
-  hosts: t-vaultwarden2.home.seiffert.me
+- name: Deploy SSH private key to all Debian LXCs
+  hosts: debian_migration_targets
   gather_facts: yes
       
   vars:
@@ -13,15 +13,31 @@
       when: ssh_private_key_content is not defined or ssh_private_key_content == ''
       run_once: true
 
+    - name: Validate alpine_source is defined
+      fail:
+        msg: "alpine_source must be defined for {{ inventory_hostname }} in inventory"
+      when: alpine_source is not defined
+
+    - name: Display deployment info
+      debug:
+        msg: |
+          ================================
+          Deployment Target: {{ inventory_hostname }}
+          Alpine Source: {{ alpine_source }}
+          Target key path: {{ target_key_path }}
+          ================================
+
     - name: Check survey variable length
       debug:
         msg: "SSH key survey var length: {{ ssh_private_key_content | length }}"
 
-    - name: Show first and last few characters
-      debug:
-        msg: |
-          First 50 chars: {{ ssh_private_key_content[:50] }}
-          Last 50 chars: {{ ssh_private_key_content[-50:] }}
+    - name: Ensure .ssh directory exists with correct permissions
+      file:
+        path: "{{ target_key_path | dirname }}"
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
 
     - name: Create Python script to format SSH key
       copy:
@@ -59,49 +75,68 @@
         path: "{{ target_key_path }}"
         mode: '0600'
 
-    - name: Show format result
-      debug:
-        msg: "Format result: {{ format_result.stdout }}"
-
-    - name: Check deployed file
-      stat:
-        path: "{{ target_key_path }}"
-      register: key_stat
-
-    - name: Show file info
-      debug:
-        msg: |
-          File exists: {{ key_stat.stat.exists }}
-          File size: {{ key_stat.stat.size }}
-          File mode: {{ key_stat.stat.mode }}
-
-    - name: Show first few lines of deployed key
-      shell: head -n 3 {{ target_key_path }}
-      register: key_head
-      ignore_errors: yes
-
-    - name: Show last few lines of deployed key  
-      shell: tail -n 3 {{ target_key_path }}
-      register: key_tail
-      ignore_errors: yes
-
-    - name: Display key file content check
-      debug:
-        msg: |
-          First 3 lines:
-          {{ key_head.stdout }}
-          
-          Last 3 lines:
-          {{ key_tail.stdout }}
-
-    - name: Test key with ssh-keygen
+    - name: Test SSH key validity
       command: ssh-keygen -y -f {{ target_key_path }}
-      register: key_test
+      register: key_validation
       ignore_errors: yes
+      changed_when: false
 
-    - name: Show key test results
+    - name: Test SSH connectivity to Alpine source as root
+      command: >
+        ssh -i {{ target_key_path }}
+        -o StrictHostKeyChecking=no
+        -o ConnectTimeout=10
+        -o BatchMode=yes
+        root@{{ alpine_source }}
+        'echo "SSH connection successful as root user"'
+      register: alpine_root_ssh_test
+      ignore_errors: yes
+      changed_when: false
+      when: key_validation is defined and key_validation.rc == 0
+
+    - name: Test Docker service on Alpine source
+      command: >
+        ssh -i {{ target_key_path }}
+        -o StrictHostKeyChecking=no
+        -o ConnectTimeout=10
+        -o BatchMode=yes
+        root@{{ alpine_source }}
+        'docker --version && systemctl is-active docker'
+      register: alpine_docker_test
+      ignore_errors: yes
+      changed_when: false
+      when: alpine_root_ssh_test is defined and alpine_root_ssh_test.rc == 0
+
+    - name: Display comprehensive test results
       debug:
         msg: |
-          Return code: {{ key_test.rc }}
-          Stdout: {{ key_test.stdout }}
-          Stderr: {{ key_test.stderr }}
+          ================================
+          Results for {{ inventory_hostname }}
+          ================================
+          SSH Key: {% if key_validation is defined and key_validation.rc == 0 %}✓ Valid{% else %}✗ Invalid{% endif %}
+          Alpine Source ({{ alpine_source }}):
+          --------------------------------
+          SSH Connection: {% if alpine_root_ssh_test is defined and alpine_root_ssh_test.rc == 0 %}✓ Success{% elif alpine_root_ssh_test is defined %}✗ Failed{% else %}⚠ Not tested{% endif %}
+          Docker Service: {% if alpine_docker_test is defined and alpine_docker_test.rc == 0 %}✓ Running{% elif alpine_docker_test is defined %}✗ Not running{% else %}⚠ Not tested{% endif %}
+          
+          Migration readiness: {% if alpine_root_ssh_test is defined and alpine_root_ssh_test.rc == 0 and alpine_docker_test is defined and alpine_docker_test.rc == 0 %}✓ Ready{% else %}✗ Not ready{% endif %}
+          ================================
+
+    - name: Summary of any issues
+      debug:
+        msg: |
+          WARNING: Issues detected for {{ inventory_hostname }}
+          Alpine source: {{ alpine_source }}
+          
+          {% if alpine_root_ssh_test is defined and alpine_root_ssh_test.rc != 0 %}
+          SSH Error: {{ alpine_root_ssh_test.stderr | default('Connection failed') }}
+          {% endif %}
+          {% if alpine_docker_test is defined and alpine_docker_test.rc != 0 %}
+          Docker Error: {{ alpine_docker_test.stderr | default('Docker service issue') }}
+          {% endif %}
+          
+          Please verify:
+          1. SSH key is correct
+          2. Alpine source {{ alpine_source }} is reachable
+          3. Docker service is running on {{ alpine_source }}
+      when: (alpine_root_ssh_test is defined and alpine_root_ssh_test.rc != 0) or (alpine_docker_test is defined and alpine_docker_test.rc != 0)

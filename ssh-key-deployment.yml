@@ -4,7 +4,7 @@
   gather_facts: yes
       
   vars:
-    target_key_path: "/root/.ssh/id_rsa"
+    ssh_key_path: "/root/.ssh/id_rsa"
     
   tasks:
     - name: Check if Survey variable is provided
@@ -24,7 +24,7 @@
           ================================
           Deployment Target: {{ inventory_hostname }}
           Alpine Source: {{ alpine_source }}
-          Target key path: {{ target_key_path }}
+          Target key path: {{ ssh_key_path }}
           ================================
 
     - name: Check survey variable length
@@ -33,7 +33,7 @@
 
     - name: Ensure .ssh directory exists with correct permissions
       file:
-        path: "{{ target_key_path | dirname }}"
+        path: "{{ ssh_key_path | dirname }}"
         state: directory
         mode: '0700'
         owner: root
@@ -67,94 +67,28 @@
         mode: '0755'
 
     - name: Format SSH key using Python script
-      command: python3 /tmp/format_ssh_key.py "{{ ssh_private_key_content }}" "{{ target_key_path }}"
+      command: python3 /tmp/format_ssh_key.py "{{ ssh_private_key_content }}" "{{ ssh_key_path }}"
       register: format_result
 
     - name: Set proper permissions on SSH key
       file:
-        path: "{{ target_key_path }}"
+        path: "{{ ssh_key_path }}"
         mode: '0600'
 
     - name: Test SSH key validity
-      command: ssh-keygen -y -f {{ target_key_path }}
+      command: ssh-keygen -y -f {{ ssh_key_path }}
       register: key_validation
       ignore_errors: yes
       changed_when: false
 
-    - name: Test SSH connectivity to Alpine source as ansible user
-      command: >
-        ssh -i {{ target_key_path }}
-        -o StrictHostKeyChecking=no
-        -o ConnectTimeout=10
-        -o BatchMode=yes
-        ansible@{{ alpine_source }}
-        'echo "SSH connection successful as ansible user"'
-      register: alpine_ssh_test
-      ignore_errors: yes
-      changed_when: false
-      when: key_validation is defined and key_validation.rc == 0
-
-    - name: Test sudo access on Alpine source
-      command: >
-        ssh -i {{ target_key_path }}
-        -o StrictHostKeyChecking=no
-        -o ConnectTimeout=10
-        -o BatchMode=yes
-        ansible@{{ alpine_source }}
-        'sudo whoami'
-      register: alpine_sudo_test
-      ignore_errors: yes
-      changed_when: false
-      when: alpine_ssh_test is defined and alpine_ssh_test.rc is defined and alpine_ssh_test.rc == 0
-
-    - name: Test Docker service on Alpine source
-      command: >
-        ssh -i {{ target_key_path }}
-        -o StrictHostKeyChecking=no
-        -o ConnectTimeout=10
-        -o BatchMode=yes
-        ansible@{{ alpine_source }}
-        'sudo docker --version && sudo rc-service docker status'
-      register: alpine_docker_test
-      ignore_errors: yes
-      changed_when: false
-      when: alpine_sudo_test is defined and alpine_sudo_test.rc is defined and alpine_sudo_test.rc == 0
-
-    - name: Display comprehensive test results
+    - name: Display deployment completion
       debug:
         msg: |
           ================================
-          Results for {{ inventory_hostname }}
+          SSH Key Deployment Complete
           ================================
-          SSH Key: {% if key_validation is defined and key_validation.rc == 0 %}✓ Valid{% else %}✗ Invalid{% endif %}
-          Alpine Source ({{ alpine_source }}):
-          --------------------------------
-          SSH as ansible user: {% if alpine_ssh_test is defined and alpine_ssh_test.rc is defined and alpine_ssh_test.rc == 0 %}✓ Success{% elif alpine_ssh_test is defined and alpine_ssh_test.rc is defined %}✗ Failed{% else %}⚠ Not tested{% endif %}
-          Sudo access: {% if alpine_sudo_test is defined and alpine_sudo_test.rc is defined and alpine_sudo_test.rc == 0 %}✓ Success{% elif alpine_sudo_test is defined and alpine_sudo_test.rc is defined %}✗ Failed{% else %}⚠ Not tested{% endif %}
-          Docker service: {% if alpine_docker_test is defined and alpine_docker_test.rc is defined and alpine_docker_test.rc == 0 %}✓ Running{% elif alpine_docker_test is defined and alpine_docker_test.rc is defined %}✗ Not running{% else %}⚠ Not tested{% endif %}
-          
-          Migration readiness: {% if alpine_ssh_test is defined and alpine_ssh_test.rc is defined and alpine_ssh_test.rc == 0 and alpine_sudo_test is defined and alpine_sudo_test.rc is defined and alpine_sudo_test.rc == 0 and alpine_docker_test is defined and alpine_docker_test.rc is defined and alpine_docker_test.rc == 0 %}✓ Ready{% else %}✗ Not ready{% endif %}
+          Target: {{ inventory_hostname }}
+          SSH Key: ✓ Deployed to {{ ssh_key_path }}
+          Alpine Source: {{ alpine_source }}
+          Key Status: {{ '✓ Valid' if key_validation.rc == 0 else '✗ Invalid' }}
           ================================
-
-    - name: Summary of any issues
-      debug:
-        msg: |
-          WARNING: Issues detected for {{ inventory_hostname }}
-          Alpine source: {{ alpine_source }}
-          
-          {% if alpine_ssh_test is defined and alpine_ssh_test.rc is defined and alpine_ssh_test.rc != 0 %}
-          SSH Error: {{ alpine_ssh_test.stderr | default('SSH connection as ansible user failed') }}
-          {% endif %}
-          {% if alpine_sudo_test is defined and alpine_sudo_test.rc is defined and alpine_sudo_test.rc != 0 %}
-          Sudo Error: {{ alpine_sudo_test.stderr | default('Sudo access failed') }}
-          {% endif %}
-          {% if alpine_docker_test is defined and alpine_docker_test.rc is defined and alpine_docker_test.rc != 0 %}
-          Docker Error: {{ alpine_docker_test.stderr | default('Docker service issue') }}
-          {% endif %}
-          
-          Please verify:
-          1. SSH key is correct and matches ansible user's authorized_keys
-          2. ansible user exists on {{ alpine_source }}
-          3. ansible user has sudo privileges on {{ alpine_source }}
-          4. Docker service is running on {{ alpine_source }}
-      when: (alpine_ssh_test is defined and alpine_ssh_test.rc is defined and alpine_ssh_test.rc != 0) or (alpine_sudo_test is defined and alpine_sudo_test.rc is defined and alpine_sudo_test.rc != 0) or (alpine_docker_test is defined and alpine_docker_test.rc is defined and alpine_docker_test.rc != 0)

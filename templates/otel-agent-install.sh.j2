@@ -67,13 +67,13 @@ processors:
   resource:
     attributes:
       - key: service.name
-        value: "lxc-\$(hostname)"
+        value: "lxc-{{ ansible_hostname }}"
         action: upsert
       - key: service.instance.id
-        value: "\$(hostname)"
+        value: "{{ ansible_hostname }}"
         action: upsert
       - key: host.name 
-        value: "\$(hostname)"
+        value: "{{ ansible_hostname }}"
         action: upsert
       - key: os.type
         value: "linux"
@@ -174,7 +174,7 @@ else
   
   echo ""
   echo "The OpenTelemetry Agent is now set up and running!"
-  echo "- It is collecting system metrics from this host"
+  echo "- It is collecting system metrics from this host ({{ ansible_hostname }})"
   echo "- It is accepting application telemetry via OTLP (gRPC on port 4317, HTTP on port 4318)"
   echo "- All telemetry is being sent to your central collector at {{ otel_collector_endpoint }}"
 fi

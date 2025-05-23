@@ -1,7 +1,9 @@
 ---
 - name: Deploy OpenTelemetry Agent to Debian containers
   hosts: debian
+  remote_user: ansible
   become: true
+  become_user: root
   vars:
     otel_collector_version: "0.82.0"
     # otel_collector_endpoint will be set via survey variable

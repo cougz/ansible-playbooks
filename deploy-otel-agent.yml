@@ -1,14 +1,20 @@
 ---
-- name: Deploy OpenTelemetry Agent to Alpine and Debian containers
-  hosts: alpine:debian
+- name: Deploy OpenTelemetry Agent to Debian containers
+  hosts: debian
   become: true
   vars:
     otel_collector_version: "0.82.0"
-    otel_collector_endpoint: "infra-metrics1.home.seiffert.me:4317"
+    # otel_collector_endpoint will be set via survey variable
     otel_script_path: "/etc/otel-agent-install.sh"
-    supervisor_config_path: "{{ '/etc/supervisor.d' if ansible_os_family == 'Alpine' else '/etc/supervisor/conf.d' }}"
+    supervisor_config_path: "/etc/supervisor/conf.d"
     
   tasks:
+    # Validate that otel_collector_endpoint is provided
+    - name: Validate otel_collector_endpoint is provided
+      fail:
+        msg: "otel_collector_endpoint must be provided via survey variable"
+      when: otel_collector_endpoint is not defined or otel_collector_endpoint == ""
+    
     # First, check if OpenTelemetry is already running properly
     - name: Check if OpenTelemetry agent is already running
       shell: supervisorctl status otel-collector | grep RUNNING
@@ -26,21 +32,7 @@
       when: otel_already_installed
         
     # Continue only if not already installed
-    - name: Ensure required packages are installed (Alpine)
-      community.general.apk:
-        name:
-          - curl
-          - tar
-          - gzip
-          - supervisor
-          - wget
-        state: present
-        update_cache: yes
-      when: 
-        - ansible_os_family == "Alpine"
-        - not otel_already_installed
-      
-    - name: Ensure required packages are installed (Debian)
+    - name: Ensure required packages are installed
       apt:
         name:
           - curl
@@ -50,11 +42,9 @@
           - wget
         state: present
         update_cache: yes
-      when: 
-        - ansible_os_family == "Debian"
-        - not otel_already_installed
+      when: not otel_already_installed
       
-    - name: Create necessary directories (Common)
+    - name: Create necessary directories
       file:
         path: "{{ item }}"
         state: directory
@@ -62,25 +52,8 @@
       loop:
         - "/etc/otel"
         - "/var/log/otel"
+        - "{{ supervisor_config_path }}"
       when: not otel_already_installed
-        
-    - name: Create supervisor directory (Alpine)
-      file:
-        path: "/etc/supervisor.d"
-        state: directory
-        mode: '0755'
-      when: 
-        - ansible_os_family == "Alpine"
-        - not otel_already_installed
-        
-    - name: Create supervisor directory (Debian)
-      file:
-        path: "/etc/supervisor/conf.d"
-        state: directory
-        mode: '0755'
-      when: 
-        - ansible_os_family == "Debian"
-        - not otel_already_installed
     
     # Check if binary already exists
     - name: Check if OpenTelemetry collector binary already exists
@@ -90,7 +63,7 @@
       
     - name: Create OpenTelemetry collector installation script
       template:
-        src: "templates/otel-agent-install-{{ ansible_os_family|lower }}.sh.j2"
+        src: "templates/otel-agent-install-debian.sh.j2"
         dest: "{{ otel_script_path }}"
         mode: '0755'
       when: 
@@ -106,33 +79,16 @@
         - not otel_binary.stat.exists
       
     # Final status check (only runs if we actually did an installation)
-    - name: Check if OpenTelemetry agent is running (Alpine)
+    - name: Check if OpenTelemetry agent is running
       shell: supervisorctl status otel-collector | grep RUNNING
       register: otel_status
       changed_when: false
       failed_when: false
-      when: 
-        - ansible_os_family == "Alpine"
-        - not otel_already_installed
-    
-    - name: Check if OpenTelemetry agent is running (Debian)
-      shell: supervisorctl status otel-collector | grep RUNNING
-      register: otel_status_debian
-      changed_when: false
-      failed_when: false
-      when: 
-        - ansible_os_family == "Debian"
-        - not otel_already_installed
+      when: not otel_already_installed
         
-    - name: Set status fact (Alpine)
+    - name: Set status fact
       set_fact:
         agent_status: "{{ otel_status.rc | default(0) if not otel_already_installed else 0 }}"
-      when: ansible_os_family == "Alpine"
-    
-    - name: Set status fact (Debian)
-      set_fact:
-        agent_status: "{{ otel_status_debian.rc | default(0) if not otel_already_installed else 0 }}"
-      when: ansible_os_family == "Debian"
       
     - name: Report installation status
       debug:

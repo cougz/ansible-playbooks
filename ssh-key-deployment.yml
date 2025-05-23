@@ -2,6 +2,7 @@
 - name: Deploy SSH private key to all Debian LXCs
   hosts: debian_migration_targets
   gather_facts: yes
+  become: yes
       
   vars:
     ssh_key_path: "/root/.ssh/id_rsa"
@@ -12,12 +13,12 @@
         msg: "SSH private key must be provided via Survey variable 'ssh_private_key_content'"
       when: ssh_private_key_content is not defined or ssh_private_key_content == ''
       run_once: true
-
+      
     - name: Validate alpine_source is defined
       fail:
         msg: "alpine_source must be defined for {{ inventory_hostname }} in inventory"
       when: alpine_source is not defined
-
+      
     - name: Display deployment info
       debug:
         msg: |
@@ -26,11 +27,11 @@
           Alpine Source: {{ alpine_source }}
           Target key path: {{ ssh_key_path }}
           ================================
-
+          
     - name: Check survey variable length
       debug:
         msg: "SSH key survey var length: {{ ssh_private_key_content | length }}"
-
+        
     - name: Ensure .ssh directory exists with correct permissions
       file:
         path: "{{ ssh_key_path | dirname }}"
@@ -38,7 +39,7 @@
         mode: '0700'
         owner: root
         group: root
-
+        
     - name: Create Python script to format SSH key
       copy:
         content: |
@@ -65,22 +66,24 @@
           print('Key formatted successfully')
         dest: /tmp/format_ssh_key.py
         mode: '0755'
-
+        
     - name: Format SSH key using Python script
       command: python3 /tmp/format_ssh_key.py "{{ ssh_private_key_content }}" "{{ ssh_key_path }}"
       register: format_result
-
+      
     - name: Set proper permissions on SSH key
       file:
         path: "{{ ssh_key_path }}"
         mode: '0600'
-
+        owner: root
+        group: root
+        
     - name: Test SSH key validity
       command: ssh-keygen -y -f {{ ssh_key_path }}
       register: key_validation
       ignore_errors: yes
       changed_when: false
-
+      
     - name: Display deployment completion
       debug:
         msg: |
@@ -92,3 +95,8 @@
           Alpine Source: {{ alpine_source }}
           Key Status: {{ '✓ Valid' if key_validation.rc == 0 else '✗ Invalid' }}
           ================================
+          
+    - name: Clean up temporary Python script
+      file:
+        path: /tmp/format_ssh_key.py
+        state: absent

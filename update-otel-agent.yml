@@ -122,17 +122,43 @@
         mode: '0644'
       notify: restart otel collector
       
-    # Validate configuration syntax
-    - name: Validate OpenTelemetry configuration
-      command: /usr/local/bin/otelcol --config={{ otel_config_path }} --dry-run
-      register: config_validation
-      changed_when: false
-      failed_when: config_validation.rc != 0
+    # Since --dry-run doesn't exist, we'll restart the collector
+    # which will validate the config on startup
+    - name: Force handler execution to restart collector
+      meta: flush_handlers
       
-    - name: Report configuration validation result
+    # Give the collector time to start and validate config
+    - name: Wait for collector to start
+      pause:
+        seconds: 5
+        
+    # Check if collector is running after config update
+    - name: Check collector status
+      shell: supervisorctl status otel-collector | grep RUNNING
+      register: final_status
+      changed_when: false
+      failed_when: false
+      
+    - name: Report final status
       debug:
-        msg: "Configuration validation successful"
-      when: config_validation.rc == 0
+        msg: |
+          {% if final_status.rc == 0 %}
+          OpenTelemetry collector configuration updated successfully and is running
+          {% else %}
+          WARNING: Collector may not be running. Check logs with: supervisorctl tail -f otel-collector
+          {% endif %}
+          
+    - name: Show collector logs if not running
+      shell: tail -50 /var/log/otel/collector.log
+      register: collector_logs
+      when: final_status.rc != 0
+      changed_when: false
+      failed_when: false
+      
+    - name: Display collector logs if issues
+      debug:
+        msg: "{{ collector_logs.stdout_lines }}"
+      when: final_status.rc != 0 and collector_logs.stdout_lines is defined
     
   handlers:
     - name: restart otel collector

@@ -2,6 +2,7 @@
 - name: Migrate Docker from Alpine to Debian LXCs
   hosts: debian_migration_targets
   gather_facts: no
+  become: yes
   vars:
     docker_path: "/var/docker"
     ssh_key_path: "/root/.ssh/id_rsa"

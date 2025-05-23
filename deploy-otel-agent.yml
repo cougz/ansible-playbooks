@@ -65,7 +65,7 @@
       
     - name: Create OpenTelemetry collector installation script
       template:
-        src: "templates/otel-agent-install-debian.sh.j2"
+        src: "templates/otel-agent-install.sh.j2"
         dest: "{{ otel_script_path }}"
         mode: '0755'
       when: 

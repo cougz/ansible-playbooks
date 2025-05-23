@@ -20,7 +20,67 @@
       set_fact:
         check_results: "{{ check_results + [{'check': 'Basic Connectivity', 'status': 'PASS', 'details': 'SSH connection successful'}] }}"
       when: ping_result is succeeded
+# User and authentication checks
+    - name: Check current user (connection user)
+      command: whoami
+      register: current_user
+      changed_when: false
 
+    - name: Check user ID and group information
+      command: id
+      register: user_id_info
+      changed_when: false
+
+    - name: Check effective user when using become
+      command: whoami
+      register: effective_user
+      changed_when: false
+      become: yes
+
+    - name: Check sudo/privilege escalation capabilities
+      command: sudo -l
+      register: sudo_check
+      changed_when: false
+      failed_when: false
+      become: no
+
+    - name: Check user's home directory
+      command: echo $HOME
+      register: user_home
+      changed_when: false
+      become: no
+
+    - name: Check user shell
+      command: echo $SHELL
+      register: user_shell
+      changed_when: false
+      become: no
+
+    - name: Check SSH key authentication method
+      shell: |
+        if [ -n "$SSH_AUTH_SOCK" ]; then
+          echo "SSH Agent authentication"
+        elif [ -f ~/.ssh/authorized_keys ] && [ -s ~/.ssh/authorized_keys ]; then
+          echo "SSH key authentication ($(wc -l < ~/.ssh/authorized_keys) keys)"
+        else
+          echo "Authentication method unclear"
+        fi
+      register: auth_method
+      changed_when: false
+      become: no
+
+    - name: Add user and authentication results
+      set_fact:
+        check_results: "{{ check_results + [
+          {'check': 'Connection User', 'status': 'INFO', 'details': 'Connected as: ' + current_user.stdout},
+          {'check': 'User ID Info', 'status': 'INFO', 'details': user_id_info.stdout},
+          {'check': 'Effective User (become)', 'status': 'PASS' if effective_user.stdout == 'root' else 'WARN', 'details': 'Can become: ' + effective_user.stdout},
+          {'check': 'Sudo Privileges', 'status': 'PASS' if sudo_check.rc == 0 else 'WARN', 'details': 'Sudo access available' if sudo_check.rc == 0 else 'Limited/no sudo access'},
+          {'check': 'User Home Directory', 'status': 'INFO', 'details': 'Home: ' + user_home.stdout},
+          {'check': 'User Shell', 'status': 'INFO', 'details': 'Shell: ' + user_shell.stdout},
+          {'check': 'Authentication Method', 'status': 'INFO', 'details': auth_method.stdout}
+        ] }}"
+    
     - name: Gather comprehensive system facts
       setup:
       register: facts_result

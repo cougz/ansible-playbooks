@@ -11,6 +11,11 @@
     supervisor_config_path: "/etc/supervisor/conf.d"
     
   tasks:
+    # Gather facts to get hostname
+    - name: Gather system facts
+      setup:
+        filter: ansible_hostname
+    
     # Validate that otel_collector_endpoint is provided
     - name: Validate otel_collector_endpoint is provided
       fail:
@@ -80,6 +85,12 @@
         - not otel_already_installed
         - not otel_binary.stat.exists
       
+    # Wait for OpenTelemetry agent to fully start
+    - name: Wait for OpenTelemetry agent to fully start
+      pause:
+        seconds: 10
+      when: not otel_already_installed
+        
     # Final status check (only runs if we actually did an installation)
     - name: Check if OpenTelemetry agent is running
       shell: supervisorctl status otel-collector | grep RUNNING

@@ -1,6 +1,6 @@
 ---
 - name: Infrastructure Server Readiness and Configuration Check
-  hosts: 172.17.102.227
+  hosts: debian
   gather_facts: yes
   become: yes
   vars:

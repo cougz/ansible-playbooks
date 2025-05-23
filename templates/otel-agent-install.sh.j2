@@ -1,22 +1,25 @@
-#!/bin/sh
+#!/bin/bash
 
-echo "Starting OpenTelemetry agent installation..."
+echo "Starting OpenTelemetry agent installation for Debian..."
 
-# Install dependencies
-echo "Installing required packages..."
-apk add --no-cache curl tar gzip supervisor wget
+# Install dependencies (should already be done by Ansible, but double-check)
+echo "Ensuring required packages are installed..."
+apt-get update -qq
+apt-get install -y curl tar gzip supervisor wget
 
 # Create directories if they don't exist
 echo "Creating necessary directories..."
-mkdir -p /etc/otel /var/log/otel /usr/local/bin /etc/supervisor.d
+mkdir -p /etc/otel /var/log/otel /usr/local/bin /etc/supervisor/conf.d
 
 # Download and install the OpenTelemetry Collector
 OTEL_VERSION="{{ otel_collector_version }}"
 echo "Downloading and installing OpenTelemetry Collector ${OTEL_VERSION}..."
 if [ ! -f /usr/local/bin/otelcol ]; then
-  curl -sSL https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol_${OTEL_VERSION}_linux_amd64.tar.gz | tar xz -C /tmp/
+  echo "Downloading OpenTelemetry Collector..."
+  curl -sSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol_${OTEL_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/
   if [ ! -f /tmp/otelcol ]; then
     echo "ERROR: Failed to extract otelcol binary from downloaded archive. Check /tmp/ directory."
+    ls -la /tmp/
     exit 1
   fi
   mv /tmp/otelcol /usr/local/bin/
@@ -64,13 +67,13 @@ processors:
   resource:
     attributes:
       - key: service.name
-        value: "lxc-$(hostname)"
+        value: "lxc-\$(hostname)"
         action: upsert
       - key: service.instance.id
-        value: "$(hostname)"
+        value: "\$(hostname)"
         action: upsert
       - key: host.name 
-        value: "$(hostname)"
+        value: "\$(hostname)"
         action: upsert
       - key: os.type
         value: "linux"
@@ -110,7 +113,7 @@ echo "Created configuration at /etc/otel/config.yaml"
 
 # Create a supervisor configuration for the OTel collector
 echo "Setting up supervisor configuration..."
-cat > /etc/supervisor.d/otel-collector.ini << EOF
+cat > /etc/supervisor/conf.d/otel-collector.conf << EOF
 [program:otel-collector]
 command=/usr/local/bin/otelcol --config=/etc/otel/config.yaml
 autostart=true
@@ -125,51 +128,24 @@ stdout_logfile_backups=3
 priority=100
 EOF
 
-echo "Created supervisor config at /etc/supervisor.d/otel-collector.ini"
+echo "Created supervisor config at /etc/supervisor/conf.d/otel-collector.conf"
 
-# Check if supervisord config exists
-if [ ! -f /etc/supervisord.conf ]; then
-  echo "Creating main supervisord configuration..."
-  cat > /etc/supervisord.conf << SUPERVISORCONFIG
-[unix_http_server]
-file=/var/run/supervisor.sock
+# Ensure supervisord is enabled and running
+echo "Ensuring supervisord service is running..."
+systemctl enable supervisor
+systemctl start supervisor
 
-[supervisord]
-logfile=/var/log/supervisord.log
-logfile_maxbytes=10MB
-logfile_backups=5
-loglevel=info
-pidfile=/var/run/supervisord.pid
-nodaemon=false
+# Wait a moment for supervisor to start
+sleep 2
 
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+# Reload supervisor configuration
+echo "Reloading supervisor configuration..."
+supervisorctl reread
+supervisorctl update
 
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-
-[include]
-files = /etc/supervisor.d/*.ini
-SUPERVISORCONFIG
-  echo "Created /etc/supervisord.conf"
-fi
-
-# Make sure supervisor is enabled to start at boot
-echo "Enabling supervisord at startup..."
-rc-update add supervisord default
-
-# Start supervisord if not already running
-echo "Starting supervisord service..."
-if ! pgrep supervisord > /dev/null; then
-  /usr/bin/supervisord -c /etc/supervisord.conf
-  echo "Supervisord started."
-else
-  echo "Supervisord already running, reloading configuration..."
-  supervisorctl reread
-  supervisorctl update
-  echo "Restarting collector with new configuration..."
-  supervisorctl restart otel-collector
-fi
+# Start the collector
+echo "Starting OpenTelemetry collector..."
+supervisorctl start otel-collector
 
 # Check if collector is running
 echo "Checking collector status..."
@@ -180,7 +156,19 @@ COLLECTOR_STATUS=$?
 if [ $COLLECTOR_STATUS -ne 0 ]; then
   echo "WARNING: Collector status check failed or collector not started."
   echo "Checking collector logs..."
-  cat /var/log/otel/collector.log
+  if [ -f /var/log/otel/collector.log ]; then
+    echo "=== Collector Log Contents ==="
+    cat /var/log/otel/collector.log
+    echo "=== End Collector Logs ==="
+  else
+    echo "No collector log file found at /var/log/otel/collector.log"
+  fi
+  echo "Checking supervisor logs..."
+  if [ -f /var/log/supervisor/supervisord.log ]; then
+    echo "=== Supervisor Log Contents ==="
+    tail -20 /var/log/supervisor/supervisord.log
+    echo "=== End Supervisor Logs ==="
+  fi
 else
   echo "OpenTelemetry Collector is running successfully!"
   
@@ -197,3 +185,4 @@ echo "You can:"
 echo "- Check agent status anytime with: supervisorctl status otel-collector"
 echo "- View agent logs with: cat /var/log/otel/collector.log"
 echo "- Restart the agent with: supervisorctl restart otel-collector"
+echo "- Check supervisor status with: systemctl status supervisor"

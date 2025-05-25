@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+
+from flask import Flask, Response, send_from_directory
+import os
+import sys
+
+app = Flask(__name__)
+
+# Define the path to the metrics file
+METRICS_FILE_PATH = "/var/lib/otelcol-contrib/lxc_metrics.prom"
+
+@app.route('/metrics')
+def serve_metrics():
+    try:
+        if not os.path.exists(METRICS_FILE_PATH):
+            app.logger.warning(f"Metrics file not found: {METRICS_FILE_PATH}")
+            # Return an empty response with 200 OK, or 404, depending on desired behavior
+            return Response("", mimetype="text/plain; version=0.0.4"), 200
+        
+        # Read the content of the metrics file
+        with open(METRICS_FILE_PATH, 'r') as f:
+            metrics_content = f.read()
+        
+        return Response(metrics_content, mimetype="text/plain; version=0.0.4")
+    except Exception as e:
+        app.logger.error(f"Error serving metrics: {e}")
+        return Response(f"Error serving metrics: {e}", mimetype="text/plain"), 500
+
+if __name__ == '__main__':
+    # Set Flask to listen on all interfaces and a specific port
+    # You might want to make the port configurable via environment variables or CLI args
+    # For now, let's hardcode it for simplicity as 9100.
+    # Note: Flask's default development server is not suitable for production.
+    # For a real production setup, consider Gunicorn/Waitress or similar.
+    # However, for a simple metrics exporter, this is often acceptable.
+    port = 9100
+    host = '0.0.0.0'
+    app.logger.info(f"Starting LXC metrics exporter on {host}:{port}")
+    app.run(host=host, port=port)

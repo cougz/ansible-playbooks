@@ -1,6 +1,6 @@
 ---
 - name: Install OpenTelemetry Collector Contrib for LXC Metrics
-  hosts: your_lxc_hosts # Change this to your target LXC group/hosts
+  hosts: debian
   gather_facts: no
   become: yes
 

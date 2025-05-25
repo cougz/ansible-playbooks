@@ -3,12 +3,12 @@ Description=OpenTelemetry LXC Metrics Exporter (Python)
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/otelcol-contrib/lxc-exporter-app.py
+ExecStart=/usr/bin/python3 {{ lxc_exporter_app_path }}
 Restart=on-failure
 RestartSec=5s
-User=otelcol
-Group=otelcol
-WorkingDirectory=/opt/otelcol-contrib
+User={{ otel_user }}
+Group={{ otel_group }}
+WorkingDirectory={{ otel_home }}
 StandardOutput=journal
 StandardError=journal
 

@@ -1,4 +1,3 @@
-# templates/otel-config.yaml.j2
 receivers:
   hostmetrics:
     collection_interval: 30s
@@ -60,7 +59,7 @@ receivers:
           system.processes.created:
             enabled: true
 
-  # Optional: Keep OTLP receiver for application telemetry
+  # Keep OTLP receiver for application telemetry (matching your old setup)
   otlp:
     protocols:
       grpc:
@@ -80,23 +79,21 @@ processors:
     
   resource:
     attributes:
+      # Match the pattern from your old script
       - key: service.name
-        value: "system-metrics"
-        action: upsert
-      - key: service.version
-        value: "1.0.0"
+        value: "lxc-{{ ansible_hostname }}"
         action: upsert
       - key: service.instance.id
         value: "{{ ansible_hostname }}"
         action: upsert
-      - key: deployment.environment
-        value: "{{ ansible_env.ENVIRONMENT | default('production') }}"
-        action: upsert
       - key: host.name
-        value: "{{ inventory_hostname }}"
+        value: "{{ ansible_hostname }}"
         action: upsert
       - key: os.type
         value: "linux"
+        action: upsert
+      - key: deployment.environment
+        value: "production"
         action: upsert
 
 exporters:
@@ -117,20 +114,21 @@ exporters:
 
 service:
   pipelines:
+    # Host metrics pipeline
     metrics:
       receivers: [hostmetrics, otlp]
       processors: [resourcedetection, resource, batch]
       exporters: [otlp, logging]
     
-    # Optional: Keep traces and logs pipelines for application telemetry
+    # Application telemetry pipelines (matching your old setup)
     traces:
       receivers: [otlp]
-      processors: [resourcedetection, resource, batch]
+      processors: [resource, batch]
       exporters: [otlp]
     
     logs:
       receivers: [otlp]
-      processors: [resourcedetection, resource, batch]
+      processors: [resource, batch]
       exporters: [otlp]
   
   extensions: []
@@ -142,3 +140,5 @@ service:
     metrics:
       level: basic
       address: 0.0.0.0:8888
+
+---

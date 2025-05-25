@@ -1,6 +1,6 @@
 ---
 - name: Install OpenTelemetry Collector Contrib for LXC Metrics
-  hosts: debian
+  hosts: t-immich2
   gather_facts: no # We explicitly gather needed facts later
   become: yes
 

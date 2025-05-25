@@ -1,4 +1,3 @@
-# templates/lxc-otel-config.yaml.j2
 receivers:
   # Receiver for general system metrics from the host
   hostmetrics:
@@ -37,13 +36,13 @@ receivers:
   prometheus_exec:
     command: "{{ lxc_metrics_script_path }}" # Path to your script, defined in playbook vars
     scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}"
-    # Pass Ansible variables as environment variables to the script
-    # This allows the script to use them for its own Prometheus labels
+    # These environment variables will be passed to the script.
+    # YOU MUST MANUALLY UPDATE THESE PLACEHOLDERS ON EACH LXC.
     env:
-      - "SERVICE_NAME={{ lxc_servicename | default('unknown_lxc_app') }}"
-      - "CTID={{ lxc_ctid | default('unknown_ctid') }}"
-      - "VID={{ lxc_vid | default('unknown_vid') }}"
-      - "ZONE={{ lxc_zone | default('unknown_zone') }}"
+      - "SERVICE_NAME=YOUR_LXC_SERVICE_NAME_HERE" # e.g., nextcloud-app
+      - "CTID=YOUR_LXC_CTID_HERE"                 # e.g., 101207
+      - "VID=YOUR_LXC_VLAN_ID_HERE"               # e.g., 101
+      - "ZONE=YOUR_LXC_ZONE_HERE"                 # e.g., apps, infrastructure
       # HOSTNAME is determined by the script itself using $(hostname)
 
   # OTLP receiver for applications or other telemetry sources
@@ -66,13 +65,13 @@ processors:
     attributes:
       # Standard OpenTelemetry Semantic Conventions
       - key: service.name # Application name
-        value: "{{ lxc_servicename | default('unknown_lxc_app') }}" # e.g., Nextcloud
+        value: "YOUR_LXC_SERVICE_NAME_HERE" # YOU MUST MANUALLY UPDATE THIS
         action: upsert
       - key: service.instance.id # Unique ID for this instance of the service/LXC
-        value: "{{ ansible_hostname }}-{{ lxc_ctid | default('no_ctid') }}" # Make it more unique
+        value: "{{ ansible_hostname }}-YOUR_LXC_CTID_HERE" # YOU MUST MANUALLY UPDATE THE CTID PART
         action: upsert
-      - key: host.name # Hostname of the LXC
-        value: "{{ ansible_hostname }}" # e.g., t-nextcloud1
+      - key: host.name # Hostname of the LXC (comes from Ansible facts)
+        value: "{{ ansible_hostname }}"
         action: upsert
       - key: os.type
         value: "linux"
@@ -81,23 +80,23 @@ processors:
         value: "lxc"
         action: upsert
       - key: container.id # Numeric LXC Container ID
-        value: "{{ lxc_ctid | default('unknown_ctid') }}" # e.g., 101207
+        value: "YOUR_LXC_CTID_HERE" # YOU MUST MANUALLY UPDATE THIS
         action: upsert
-      - key: container.name # Friendly name for the container
-        value: "{{ ansible_hostname }}" # e.g., t-nextcloud1
+      - key: container.name # Friendly name for the container (comes from Ansible facts)
+        value: "{{ ansible_hostname }}"
         action: upsert
 
       # Custom attributes for LXC specific information
       - key: lxc.vlan.id # VLAN ID
-        value: "{{ lxc_vid | default('unknown_vid') }}" # e.g., 101
+        value: "YOUR_LXC_VLAN_ID_HERE" # YOU MUST MANUALLY UPDATE THIS
         action: upsert
       - key: lxc.zone # Zone for the LXC
-        value: "{{ lxc_zone | default('unknown_zone') }}" # e.g., apps, infrastructure
+        value: "YOUR_LXC_ZONE_HERE" # YOU MUST MANUALLY UPDATE THIS
         action: upsert
 
       # Other potentially useful attributes (already present from previous version)
       - key: host.memory.total_bytes
-        value: "{{ ansible_memtotal_mb * 1024 * 1024 }}" # Convert MB to Bytes
+        value: "{{ ansible_memtotal_mb * 1024 * 1024 }}" # Convert MB to Bytes (comes from Ansible facts)
         action: upsert
 
   # Batch processor to group telemetry data before exporting
@@ -108,16 +107,7 @@ processors:
 exporters:
   # OTLP exporter to send data to your LGTM stack or other OTLP endpoint
   otlp:
-    endpoint: "{{ otel_endpoint }}" # Your LGTM stack's OTLP endpoint
-    {% if otel_headers is defined and otel_headers != "" -%}
-    headers:
-      {% for header in otel_headers.split(',') -%}
-      {% set key_value = header.split('=') -%}
-      {% if key_value | length == 2 -%}
-      "{{ key_value[0].strip() }}": "{{ key_value[1].strip() }}"
-      {% endif -%}
-      {% endfor -%}
-    {% endif -%}
+    endpoint: "{{ otel_endpoint }}" # This will come from your Semaphore Survey Variable
     tls:
       insecure: true # For production, set to false and configure TLS properly
 

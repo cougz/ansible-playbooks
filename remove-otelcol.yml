@@ -11,15 +11,38 @@
       - otelcol
       - otel-collector
     otel_binaries:
-      # Contrib installation paths
+      # Contrib installation paths (from failed migration)
       - /opt/otelcol-contrib/otelcol-contrib
       - /usr/local/bin/otelcol-contrib
       - /usr/bin/otelcol-contrib
-      # Script-based installation paths (basic collector)
+      # Script-based installation paths (basic collector from install script)
       - /usr/local/bin/otelcol
       - /usr/bin/otelcol
       # Alternative locations
-      - /opt/otelcol/
+      - /opt/otelcol/otelcol
+    otel_directories:
+      # Contrib installation directories
+      - /opt/otelcol-contrib
+      - /etc/otelcol-contrib
+      - /var/log/otelcol-contrib
+      # Script-based installation directories
+      - /etc/otel
+      - /var/log/otel
+      # Alternative/legacy directories
+      - /opt/otelcol
+      - /etc/otelcol
+      - /var/log/otelcol
+    supervisor_configs:
+      # Script-based supervisor config (from install script)
+      - /etc/supervisor/conf.d/otel-collector.conf
+      # Contrib supervisor configs
+      - /etc/supervisor/conf.d/otelcol.conf
+      - /etc/supervisor/conf.d/otelcol-contrib.conf
+    systemd_services:
+      # Contrib systemd services
+      - /etc/systemd/system/otelcol-contrib.service
+      - /etc/systemd/system/otelcol.service
+      - /etc/systemd/system/otel-collector.service
 
   tasks:
     - name: "Display removal banner"

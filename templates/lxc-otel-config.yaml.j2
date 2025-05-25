@@ -21,7 +21,7 @@ receivers:
       memory:
         metrics:
           system.memory.usage: {enabled: true}
-          system.memory.utilization: {enabled: true} # Percentage
+          system.memory.utilization: {enabled: true}
       network:
         metrics:
           system.network.io: {enabled: true}
@@ -32,15 +32,15 @@ receivers:
         metrics:
           system.processes.count: {enabled: true}
 
-  # Receiver for LXC metrics from your custom script served via a Python web server
+  # Receiver for LXC metrics from universal script
   prometheus:
     config:
       scrape_configs:
         - job_name: 'lxc-script-metrics'
-          scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}" # Use existing interval variable
+          scrape_interval: 30s
           static_configs:
-            - targets: ['localhost:9100'] # Flask app runs on this port
-          metrics_path: /metrics # Flask app serves metrics on /metrics endpoint
+            - targets: ['localhost:9100']
+          metrics_path: /metrics
 
   # OTLP receiver for applications or other telemetry sources
   otlp:
@@ -54,36 +54,40 @@ processors:
   # Memory limiter to prevent the collector from using too much memory
   memory_limiter:
     check_interval: 5s
-    limit_percentage: 75 # Percentage of total host memory
-    spike_limit_percentage: 20 # Additional burst capacity
+    limit_percentage: 75
+    spike_limit_percentage: 20
 
-  resource:
-    attributes:
-      - key: os.type
+  # Attributes processor to add custom labels that become Prometheus labels
+  attributes:
+    actions:
+      - key: os_type
         value: "linux"
         action: upsert
-      - key: host.name # Hostname of the LXC (comes from Ansible facts)
+      - key: host_name
         value: "{{ ansible_hostname }}"
         action: upsert
-      - key: app.name # Application name
+      - key: app_name
         value: "lxc-monitoring"
+        action: upsert
+      - key: lxc_service
+        value: "{{ inventory_hostname.split('-')[1] if '-' in inventory_hostname else inventory_hostname }}"
         action: upsert
 
   # Batch processor to group telemetry data before exporting
   batch:
-    timeout: 5s # Max time to wait before sending a batch
-    send_batch_size: 512 # Max number of items in a batch
+    timeout: 5s
+    send_batch_size: 512
 
 exporters:
-  # OTLP exporter to send data to your LGTM stack or other OTLP endpoint
+  # OTLP exporter to send data to your LGTM stack
   otlp:
-    endpoint: "{{ otel_endpoint }}" # This will come from your Semaphore Survey Variable
+    endpoint: "http://your-lgtm-host:4318"  # UPDATE THIS to your actual LGTM endpoint
     tls:
-      insecure: true # For production, set to false and configure TLS properly
+      insecure: true
 
   # Debug exporter (optional, prints telemetry to collector logs)
   debug:
-    verbosity: basic # Options: basic, normal, detailed
+    verbosity: basic
 
 extensions:
   # Health check extension for monitoring collector status
@@ -95,22 +99,21 @@ service:
   pipelines:
     metrics:
       receivers: [hostmetrics, prometheus, otlp]
-      processors: [memory_limiter, resource, batch] # resource processor applies the 3 labels to ALL metrics
-      exporters: [otlp, debug] # Remove 'debug' for production
+      processors: [memory_limiter, attributes, batch]  # attributes processor adds labels that become Prometheus labels
+      exporters: [otlp, debug]
     traces:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [attributes, batch]
       exporters: [otlp]
     logs:
       receivers: [otlp]
-      processors: [resource, batch]
+      processors: [attributes, batch]
       exporters: [otlp]
 
   # Collector's own telemetry settings
   telemetry:
     logs:
-      level: info # Collector's internal log level
-      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
+      level: info
     metrics:
-      level: basic # Level of detail for collector's internal metrics
-      address: "127.0.0.1:8888" # Endpoint to scrape collector's own metrics
+      level: basic
+      address: "127.0.0.1:8888"

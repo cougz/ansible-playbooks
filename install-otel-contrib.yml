@@ -1,5 +1,7 @@
+---
 - name: Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector Contrib
   hosts: debian
+  gather_facts: no
   become: yes
 
   vars:
@@ -66,8 +68,8 @@
     - name: Remove OpenTelemetry from supervisor management
       shell: |
         supervisorctl remove otel-collector 2>/dev/null || true
-        supervisorctl reread
-        supervisorctl update
+        supervisorctl reread 2>/dev/null || true
+        supervisorctl update 2>/dev/null || true
       ignore_errors: yes
 
     - name: Remove supervisor configuration file
@@ -125,6 +127,12 @@
             state: absent
           when: old_systemd_service.stat.exists
 
+        - name: Force removal of old processes if still running
+          shell: |
+            pkill -f "otelcol.*--config=/etc/otel/config.yaml" || true
+            sleep 2
+          ignore_errors: yes
+
     - name: Verify complete cleanup
       shell: |
         echo "=== POST-CLEANUP VERIFICATION ==="
@@ -166,9 +174,18 @@
       file:
         path: "{{ item }}"
         state: directory
+        mode: '0755'
+      loop:
+        - "{{ otel_home }}"
+        - "{{ otel_config_dir }}"
+        - "{{ otel_log_dir }}"
+
+    - name: Set proper ownership on OpenTelemetry directories
+      file:
+        path: "{{ item }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
-        mode: '0755'
+        recurse: yes
       loop:
         - "{{ otel_home }}"
         - "{{ otel_config_dir }}"
@@ -186,8 +203,7 @@
         src: "/tmp/otelcol-contrib.tar.gz"
         dest: "{{ otel_home }}"
         remote_src: yes
-        owner: "{{ otel_user }}"
-        group: "{{ otel_group }}"
+        mode: '0755'
         creates: "{{ otel_home }}/otelcol-contrib"
 
     - name: Set executable permissions on otelcol-contrib binary
@@ -196,6 +212,13 @@
         mode: '0755'
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
+
+    - name: Fix ownership on extracted files
+      file:
+        path: "{{ otel_home }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        recurse: yes
 
     - name: Create OpenTelemetry Collector configuration
       template:

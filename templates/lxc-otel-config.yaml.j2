@@ -36,14 +36,7 @@ receivers:
   prometheus_exec:
     command: "{{ lxc_metrics_script_path }}" # Path to your script, defined in playbook vars
     scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}"
-    # These environment variables will be passed to the script.
-    # YOU MUST MANUALLY UPDATE THESE PLACEHOLDERS ON EACH LXC.
-    env:
-      - "SERVICE_NAME=YOUR_LXC_SERVICE_NAME_HERE" # e.g., nextcloud-app
-      - "CTID=YOUR_LXC_CTID_HERE"                 # e.g., 101207
-      - "VID=YOUR_LXC_VLAN_ID_HERE"               # e.g., 101
-      - "ZONE=YOUR_LXC_ZONE_HERE"                 # e.g., apps, infrastructure
-      # HOSTNAME is determined by the script itself using $(hostname)
+    # Removed: 'env' section. All resource labels are now managed by the 'resource' processor.
 
   # OTLP receiver for applications or other telemetry sources
   otlp:

@@ -15,8 +15,8 @@
     
     # Paths for LXC custom metrics components
     lxc_metrics_script_filename: "lxc-metrics-script.sh"
-    lxc_exporter_app_filename: "lxc-exporter-app.py"
-    lxc_exporter_service_filename: "lxc-exporter-service.service"
+    lxc_exporter_app_filename: "lxc-metrics-app.py"
+    lxc_exporter_service_filename: "lxc-metrics.service"
 
     lxc_metrics_script_path: "{{ otel_home }}/{{ lxc_metrics_script_filename }}"
     lxc_exporter_app_path: "{{ otel_home }}/{{ lxc_exporter_app_filename }}"

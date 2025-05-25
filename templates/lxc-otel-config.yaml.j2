@@ -57,43 +57,16 @@ processors:
     limit_percentage: 75 # Percentage of total host memory
     spike_limit_percentage: 20 # Additional burst capacity
 
-  # Resource processor to add common identifying attributes to all telemetry
   resource:
     attributes:
-      # Standard OpenTelemetry Semantic Conventions
-      - key: service.name # Application name
-        value: "YOUR_LXC_SERVICE_NAME_HERE" # YOU MUST MANUALLY UPDATE THIS
-        action: upsert
-      - key: service.instance.id # Unique ID for this instance of the service/LXC
-        value: "{{ ansible_hostname }}-YOUR_LXC_CTID_HERE" # YOU MUST MANUALLY UPDATE THE CTID PART
+      - key: os.type
+        value: "linux"
         action: upsert
       - key: host.name # Hostname of the LXC (comes from Ansible facts)
         value: "{{ ansible_hostname }}"
         action: upsert
-      - key: os.type
-        value: "linux"
-        action: upsert
-      - key: container.runtime
-        value: "lxc"
-        action: upsert
-      - key: container.id # Numeric LXC Container ID
-        value: "YOUR_LXC_CTID_HERE" # YOU MUST MANUALLY UPDATE THIS
-        action: upsert
-      - key: container.name # Friendly name for the container (comes from Ansible facts)
-        value: "{{ ansible_hostname }}"
-        action: upsert
-
-      # Custom attributes for LXC specific information
-      - key: lxc.vlan.id # VLAN ID
-        value: "YOUR_LXC_VLAN_ID_HERE" # YOU MUST MANUALLY UPDATE THIS
-        action: upsert
-      - key: lxc.zone # Zone for the LXC
-        value: "YOUR_LXC_ZONE_HERE" # YOU MUST MANUALLY UPDATE THIS
-        action: upsert
-
-      # Other potentially useful attributes (already present from previous version)
-      - key: host.memory.total_bytes
-        value: "{{ ansible_memtotal_mb * 1024 * 1024 }}" # Convert MB to Bytes (comes from Ansible facts)
+      - key: app.name # Application name
+        value: "lxc-monitoring"
         action: upsert
 
   # Batch processor to group telemetry data before exporting
@@ -121,8 +94,8 @@ service:
   extensions: [health_check]
   pipelines:
     metrics:
-      receivers: [hostmetrics, prometheus, otlp] # Changed from prometheus_exec to prometheus
-      processors: [memory_limiter, resource, batch]
+      receivers: [hostmetrics, prometheus, otlp]
+      processors: [memory_limiter, resource, batch] # resource processor applies the 3 labels to ALL metrics
       exporters: [otlp, debug] # Remove 'debug' for production
     traces:
       receivers: [otlp]

@@ -48,7 +48,7 @@ processors:
 exporters:
   # OTLP exporter to send data to your LGTM stack
   otlp:
-    endpoint: "http://your-lgtm-host:4318"  # UPDATE THIS to your actual LGTM endpoint
+    endpoint: "{{ otel_endpoint }}"
     tls:
       insecure: true
 

@@ -61,7 +61,7 @@ receivers:
             enabled: true
           system.processes.created:
             enabled: true
-  
+
   # Keep OTLP receiver for application telemetry
   otlp:
     protocols:
@@ -75,15 +75,15 @@ processors:
     timeout: 10s
     send_batch_size: 1024
   
-  resourcedetection:
-    detectors: [env, system]
-    timeout: 5s
-    override: true  # Important - ensure system-level attributes don't override our container ones
+  # Add memory_limiter as a processor, not an extension
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
   
-  # Custom memory metrics processor
+  # Use host.name as our key identifier for container-specific metrics
   resource:
     attributes:
-      # Set container-specific attributes
       - key: service.name
         value: "lxc-{{ ansible_hostname }}"
         action: upsert
@@ -93,35 +93,23 @@ processors:
       - key: host.name
         value: "{{ ansible_hostname }}"
         action: upsert
+      - key: os.type
+        value: "linux"
+        action: upsert
+      # Add explicit container-level information
+      - key: container.id
+        value: "{{ ansible_hostname }}"
+        action: upsert
       - key: container.name
         value: "{{ ansible_hostname }}"
         action: upsert
       - key: container.type
         value: "lxc"
         action: upsert
-      - key: os.type
-        value: "linux"
+      # Add total memory information from ansible facts
+      - key: container.memory.total_bytes
+        value: "{{ ansible_memtotal_mb * 1024 * 1024 }}"
         action: upsert
-      - key: deployment.environment
-        value: "production"
-        action: upsert
-      # Add memory totals from what we can observe (host perspective)
-      - key: container.memory.total_mb
-        value: "{{ ansible_memtotal_mb }}"
-        action: upsert
-      - key: container.id
-        value: "{{ ansible_hostname }}"
-        action: upsert
-
-  # Metrics transformation to make memory metrics per-container
-  metricstransform:
-    transforms:
-      - include: system.memory.usage
-        action: update
-        operations:
-          - action: add_label
-            new_label: container.id
-            new_value: "{{ ansible_hostname }}"
 
 exporters:
   otlp:
@@ -143,29 +131,19 @@ exporters:
 
 extensions:
   health_check:
-    endpoint: 0.0.0.0:13133
-  
-  memory_limiter:
-    check_interval: 5s
-    limit_percentage: 80
-    spike_limit_percentage: 25
+    endpoint: 127.0.0.1:13133
 
 service:
-  extensions: [health_check, memory_limiter]
+  extensions: [health_check]  # Only include health_check, not memory_limiter
   
   pipelines:
-    # Host metrics pipeline
-    metrics/host:
-      receivers: [hostmetrics]
-      processors: [resourcedetection, resource, metricstransform, batch]
+    # Single metrics pipeline with container-specific attributes
+    metrics:
+      receivers: [hostmetrics, otlp]
+      processors: [memory_limiter, resource, batch]  # Include memory_limiter as a processor
       exporters: [otlp, debug]
     
-    # Application telemetry pipeline
-    metrics/app:
-      receivers: [otlp]
-      processors: [resource, batch]
-      exporters: [otlp]
-    
+    # Application telemetry pipelines
     traces:
       receivers: [otlp]
       processors: [resource, batch]
@@ -182,4 +160,4 @@ service:
       output_paths: ["{{ otel_log_dir }}/otelcol.log"]
     metrics:
       level: basic
-      address: 0.0.0.0:8888
+      address: "127.0.0.1:8888"  # Use loopback address instead of 0.0.0.0

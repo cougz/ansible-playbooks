@@ -285,6 +285,61 @@
       systemd:
         daemon_reload: yes
 
+    # ============= LXC CONTAINER METRICS SETUP =============
+    - name: Ensure access to cgroups
+      file:
+        path: /sys/fs/cgroup
+        state: directory
+        mode: '0755'
+      ignore_errors: yes
+
+    - name: Check cgroup memory path exists
+      stat:
+        path: /sys/fs/cgroup/memory
+      register: cgroup_memory_path
+      ignore_errors: yes
+
+    - name: Display cgroup system info
+      debug:
+        msg: "Cgroups memory path exists: {{ cgroup_memory_path.stat.exists | default(false) }}"
+
+    - name: Create diagnostic script to identify container memory metrics
+      copy:
+        dest: "/tmp/container-metrics-debug.sh"
+        mode: 0755
+        content: |
+          #!/bin/bash
+          echo "=== Container Metrics Debug Info ==="
+          echo "Hostname: $(hostname)"
+          echo ""
+          echo "Memory Information:"
+          free -m
+          echo ""
+          echo "Container cgroup paths:"
+          find /sys/fs/cgroup -name "*$(hostname)*" 2>/dev/null
+          echo ""
+          echo "Memory limits:"
+          cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo "No memory limit file found"
+          echo ""
+          echo "Active cgroups:"
+          ls -la /sys/fs/cgroup/
+          echo ""
+          echo "Process namespaces:"
+          ls -la /proc/self/ns/
+      when: not ansible_check_mode
+
+    - name: Run diagnostic script
+      shell: /tmp/container-metrics-debug.sh
+      register: container_metrics_debug
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Display container metrics debug info
+      debug:
+        msg: "{{ container_metrics_debug.stdout_lines }}"
+      when: not ansible_check_mode
+
+    # ============= START AND VERIFY SERVICES =============
     - name: Start and enable OpenTelemetry Collector service
       systemd:
         name: otelcol-contrib

@@ -1,5 +1,5 @@
 - name: Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector Contrib
-  hosts: debian_servers
+  hosts: debian
   become: yes
   vars_prompt:
     - name: otel_endpoint

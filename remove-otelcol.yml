@@ -29,10 +29,51 @@
           OpenTelemetry Collector Complete Removal
           ===============================================
           Target: {{ inventory_hostname }}
+          OS Family: {{ ansible_os_family }}
+          Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Architecture: {{ ansible_architecture }}
           Removing all OTel installations and configurations
           ===============================================
 
-    - name: "Stop all possible OpenTelemetry systemd services"
+    - name: "Detect service management system"
+      set_fact:
+        has_systemd: "{{ ansible_service_mgr == 'systemd' }}"
+        has_openrc: "{{ ansible_os_family == 'Alpine' }}"
+        has_supervisor: true  # Will check this dynamically
+
+    - name: "Check if systemctl is available"
+      command: which systemctl
+      register: systemctl_check
+      failed_when: false
+      changed_when: false
+
+    - name: "Check if rc-service is available (Alpine OpenRC)"
+      command: which rc-service
+      register: rcservice_check
+      failed_when: false
+      changed_when: false
+
+    - name: "Check if supervisorctl is available"
+      command: which supervisorctl
+      register: supervisorctl_check
+      failed_when: false
+      changed_when: false
+
+    - name: "Update service management facts"
+      set_fact:
+        has_systemd: "{{ systemctl_check.rc == 0 }}"
+        has_openrc: "{{ rcservice_check.rc == 0 }}"
+        has_supervisor: "{{ supervisorctl_check.rc == 0 }}"
+
+    - name: "Display detected service management"
+      debug:
+        msg: |
+          Service Management Detection:
+          - SystemD: {{ has_systemd }}
+          - OpenRC (Alpine): {{ has_openrc }}
+          - Supervisor: {{ has_supervisor }}
+
+    - name: "Stop systemd OpenTelemetry services (Debian 12)"
       systemd:
         name: "{{ item }}"
         state: stopped
@@ -40,13 +81,38 @@
         daemon_reload: yes
       loop: "{{ otel_service_names }}"
       ignore_errors: yes
+      when: has_systemd
       register: systemd_stop_result
 
-    - name: "Display systemd service stop results"
+    - name: "Stop OpenRC OpenTelemetry services (Alpine Linux)"
+      command: "rc-service {{ item }} stop"
+      loop: "{{ otel_service_names }}"
+      ignore_errors: yes
+      when: has_openrc and not has_systemd
+      register: openrc_stop_result
+
+    - name: "Disable OpenRC OpenTelemetry services (Alpine Linux)"
+      command: "rc-update del {{ item }}"
+      loop: "{{ otel_service_names }}"
+      ignore_errors: yes
+      when: has_openrc and not has_systemd
+
+    - name: "Display service stop results"
       debug:
-        msg: "Service {{ item.item }}: {{ 'stopped' if item.changed else 'not found or already stopped' }}"
-      loop: "{{ systemd_stop_result.results }}"
-      when: item is defined
+        msg: |
+          Service Stop Results:
+          {% if has_systemd and systemd_stop_result is defined %}
+          SystemD Services:
+          {% for result in systemd_stop_result.results %}
+          - {{ result.item }}: {{ 'stopped' if result.changed else 'not found or already stopped' }}
+          {% endfor %}
+          {% endif %}
+          {% if has_openrc and openrc_stop_result is defined %}
+          OpenRC Services:
+          {% for result in openrc_stop_result.results %}
+          - {{ result.item }}: {{ 'stopped' if result.rc == 0 else 'not found or already stopped' }}
+          {% endfor %}
+          {% endif %}
 
     - name: "Stop OpenTelemetry via supervisor"
       supervisorctl:
@@ -57,6 +123,7 @@
         - otelcol
         - otelcol-contrib
       ignore_errors: yes
+      when: has_supervisor
       register: supervisor_stop_result
 
     - name: "Remove from supervisor management"
@@ -68,18 +135,23 @@
         - otelcol
         - otelcol-contrib
       ignore_errors: yes
+      when: has_supervisor
 
-    - name: "Force kill any remaining OpenTelemetry processes"
+    - name: "Force kill any remaining OpenTelemetry processes (safe method)"
       shell: |
-        # Kill all possible otel processes
-        pkill -f "otelcol" || true
-        pkill -f "otel-collector" || true
-        pkill -f "opentelemetry" || true
-        sleep 3
-        # Force kill if still running
-        pkill -9 -f "otelcol" || true
-        pkill -9 -f "otel-collector" || true
-        pkill -9 -f "opentelemetry" || true
+        # First try graceful termination
+        for proc in $(pgrep -f "otelcol\|otel-collector" 2>/dev/null || true); do
+          if [ -n "$proc" ]; then
+            kill -TERM "$proc" 2>/dev/null || true
+          fi
+        done
+        sleep 2
+        # Then force kill if still running
+        for proc in $(pgrep -f "otelcol\|otel-collector" 2>/dev/null || true); do
+          if [ -n "$proc" ]; then
+            kill -KILL "$proc" 2>/dev/null || true
+          fi
+        done
       ignore_errors: yes
       register: kill_processes
 
@@ -94,29 +166,42 @@
           Remaining OTel processes check:
           {{ remaining_processes.stdout }}
 
-    - name: "Remove systemd service files"
+    - name: "Remove systemd service files (Debian 12)"
       file:
         path: "{{ item }}"
         state: absent
       loop: "{{ systemd_services }}"
+      when: has_systemd
       register: systemd_files_removed
+
+    - name: "Remove OpenRC service files (Alpine Linux)"
+      file:
+        path: "/etc/init.d/{{ item }}"
+        state: absent
+      loop: "{{ otel_service_names }}"
+      when: has_openrc
+      register: openrc_files_removed
+
+    - name: "Reload systemd daemon after service file removal (Debian 12)"
+      systemd:
+        daemon_reload: yes
+      when: has_systemd
+      ignore_errors: yes
 
     - name: "Remove supervisor configuration files"
       file:
         path: "{{ item }}"
         state: absent
       loop: "{{ supervisor_configs }}"
+      when: has_supervisor
       register: supervisor_files_removed
-
-    - name: "Reload systemd daemon after service file removal"
-      systemd:
-        daemon_reload: yes
 
     - name: "Reload supervisor configuration"
       supervisorctl:
         name: all
         state: reread
       ignore_errors: yes
+      when: has_supervisor
 
     - name: "Remove OpenTelemetry binaries"
       file:
@@ -231,8 +316,16 @@
       debug:
         msg: |
           === REMOVAL VERIFICATION ===
-          Systemd services: {{ systemd_files_removed.results | selectattr('changed') | list | length }} removed
-          Supervisor configs: {{ supervisor_files_removed.results | selectattr('changed') | list | length }} removed
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          {% if has_systemd %}
+          SystemD services: {{ systemd_files_removed.results | selectattr('changed') | list | length if systemd_files_removed is defined else 0 }} removed
+          {% endif %}
+          {% if has_openrc %}
+          OpenRC services: {{ openrc_files_removed.results | selectattr('changed') | list | length if openrc_files_removed is defined else 0 }} removed
+          {% endif %}
+          {% if has_supervisor %}
+          Supervisor configs: {{ supervisor_files_removed.results | selectattr('changed') | list | length if supervisor_files_removed is defined else 0 }} removed
+          {% endif %}
           Binaries: {{ binaries_removed.results | selectattr('changed') | list | length }} removed
           Directories: {{ directories_removed.results | selectattr('changed') | list | length }} removed
           
@@ -254,10 +347,16 @@
           OpenTelemetry Collector Removal Summary
           ===============================================
           Host: {{ inventory_hostname }}
+          OS: {{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_os_family }})
           Status: REMOVAL COMPLETE
           
+          Service Management Used:
+          {% if has_systemd %}- SystemD (Debian 12 style){% endif %}
+          {% if has_openrc %}- OpenRC (Alpine Linux style){% endif %}
+          {% if has_supervisor %}- Supervisor{% endif %}
+          
           What was removed:
-          - All systemd services (otelcol-contrib, otelcol, otel-collector)
+          - All system services (systemd/openrc managed)
           - All supervisor configurations (including script-based otel-collector.conf)
           - All binary files (both contrib and basic collector versions)
           - All configuration directories (/etc/otel, /etc/otelcol-contrib, etc.)

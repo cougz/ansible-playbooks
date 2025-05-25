@@ -1,0 +1,273 @@
+---
+- name: Install OpenTelemetry Collector Contrib for LXC Metrics
+  hosts: your_lxc_hosts # Change this to your target LXC group/hosts
+  gather_facts: no
+  become: yes
+
+  vars:
+    otel_version: 0.126.0
+    otel_user: otelcol
+    otel_group: otelcol
+    otel_home: /opt/otelcol-contrib
+    otel_config_dir: /etc/otelcol-contrib
+    otel_log_dir: /var/log/otelcol-contrib
+    lxc_metrics_script_path: "{{ otel_home }}/lxc-comprehensive-metrics.sh"
+    lxc_metrics_scrape_interval: "30s" # Default scrape interval for LXC script
+
+    # otel_endpoint is expected to be defined via Semaphore Survey Variable
+    # Example: otel_endpoint: "http://your-lgtm-stack:4317"
+
+    # IMPORTANT: LXC-specific identifiers (lxc_servicename, lxc_ctid, lxc_vid, lxc_zone)
+    # are NO LONGER defined via Ansible variables in this playbook.
+    # They will be placeholders in the generated config.yaml and MUST be
+    # manually updated on each LXC after deployment for correct metric labeling.
+
+  tasks:
+    - name: Validate mandatory survey variables
+      block:
+        - name: Check if otel_endpoint is provided
+          fail:
+            msg: "MANDATORY: OTEL endpoint must be provided via Semaphore Survey variable 'otel_endpoint'."
+          when: otel_endpoint is not defined or otel_endpoint == ''
+          run_once: true # Ensure this check runs only once for the entire play
+
+    - name: Gather facts for target machines (required for ansible_hostname, ansible_memtotal_mb)
+      setup:
+        filter:
+          - ansible_hostname
+          - ansible_memtotal_mb
+
+    - name: Display installation info
+      debug:
+        msg: |
+          ===============================================
+          OpenTelemetry Collector Contrib Installation
+          ===============================================
+          Target Endpoint: {{ otel_endpoint }}
+          OTel Version: {{ otel_version }}
+
+          IMPORTANT: LXC-specific identifiers (servicename, ctid, vid, zone)
+          in /etc/otelcol-contrib/config.yaml and
+          /opt/otelcol-contrib/lxc-comprehensive-metrics.sh
+          will be PLACEHOLDERS.
+          YOU MUST MANUALLY EDIT these files on each LXC after deployment
+          to insert the correct unique values.
+          ===============================================
+
+    - name: Create OpenTelemetry group
+      group:
+        name: "{{ otel_group }}"
+        system: yes
+
+    - name: Create OpenTelemetry user
+      user:
+        name: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        system: yes
+        shell: /bin/false
+        home: "{{ otel_home }}"
+        create_home: no
+
+    - name: Create OpenTelemetry directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ otel_home }}"
+        - "{{ otel_config_dir }}"
+        - "{{ otel_log_dir }}"
+
+    - name: Set proper ownership on OpenTelemetry directories
+      file:
+        path: "{{ item }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        recurse: yes
+      loop:
+        - "{{ otel_home }}"
+        - "{{ otel_config_dir }}"
+        - "{{ otel_log_dir }}"
+      when: not ansible_check_mode
+
+    - name: Download OpenTelemetry Collector Contrib
+      get_url:
+        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz"
+        dest: /tmp/otelcol-contrib.tar.gz
+        mode: '0644'
+        timeout: 120
+
+    - name: Extract OpenTelemetry Collector Contrib
+      unarchive:
+        src: /tmp/otelcol-contrib.tar.gz
+        dest: "{{ otel_home }}"
+        remote_src: yes
+        creates: "{{ otel_home }}/otelcol-contrib" # Ensure idempotent extraction
+      become: yes
+      when: not ansible_check_mode
+
+    - name: Set executable permissions on otelcol-contrib binary
+      file:
+        path: "{{ otel_home }}/otelcol-contrib"
+        mode: '0755'
+      when: not ansible_check_mode
+
+    - name: Fix ownership on extracted files
+      file:
+        path: "{{ otel_home }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        recurse: yes
+      when: not ansible_check_mode
+
+    - name: Copy LXC metrics script to otel_home
+      template:
+        src: lxc-comprehensive-metrics.sh.j2
+        dest: "{{ lxc_metrics_script_path }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0755' # Make the script executable
+
+    - name: Create OpenTelemetry Collector configuration
+      template:
+        src: lxc-otel-config.yaml.j2
+        dest: "{{ otel_config_dir }}/config.yaml"
+        owner: "{{ otel_user if not ansible_check_mode else omit }}"
+        group: "{{ otel_group if not ansible_check_mode else omit }}"
+        mode: '0644'
+      notify: restart otelcol
+
+    - name: Ensure config file is readable by otelcol user
+      file:
+        path: "{{ otel_config_dir }}/config.yaml"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0644'
+      when: not ansible_check_mode
+
+    - name: Create OpenTelemetry systemd service
+      template:
+        src: lxc-otelcol-contrib.service.j2
+        dest: /etc/systemd/system/otelcol-contrib.service
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart otelcol
+
+    - name: Install required packages for system monitoring (procps, sysstat, bc)
+      apt:
+        name:
+          - procps
+          - sysstat
+          - bc # 'bc' is used in your lxc-comprehensive-metrics.sh script for calculations
+        state: present
+        update_cache: yes
+
+    - name: Clean up downloaded archive
+      file:
+        path: /tmp/otelcol-contrib.tar.gz
+        state: absent
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Ensure access to cgroups (for hostmetrics receiver, if running outside container)
+      file:
+        path: /sys/fs/cgroup
+        state: directory
+        mode: '0755'
+      ignore_errors: yes # May not be fully accessible within an unprivileged LXC
+
+    - name: Start and enable OpenTelemetry Collector service
+      systemd:
+        name: otelcol-contrib
+        state: started
+        enabled: yes
+      when: not ansible_check_mode
+
+    - name: Wait for service to start
+      pause:
+        seconds: 15
+      when: not ansible_check_mode
+
+    - name: Check OpenTelemetry Collector service status
+      systemd:
+        name: otelcol-contrib
+      register: otel_service_status
+      when: not ansible_check_mode
+
+    - name: Verify collector binary version
+      shell: "{{ otel_home }}/otelcol-contrib --version"
+      register: otel_version_check
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Verify collector is responding on metrics endpoint
+      uri:
+        url: "http://localhost:8888/metrics"
+        method: GET
+        timeout: 15
+      register: health_check
+      retries: 5
+      delay: 3
+      ignore_errors: yes
+      when: not ansible_check_mode
+
+    - name: Display installation results
+      debug:
+        msg: |
+          === INSTALLATION COMPLETE ===
+          {% if not ansible_check_mode %}
+          Service Status: {{ otel_service_status.status.ActiveState | default('Unknown - check service logs') }}
+          Binary Version: {{ otel_version_check.stdout | default('Unknown') }}
+          Health Check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
+          Metrics Endpoint: {{ 'Accessible' if health_check.status == 200 else 'Not accessible' }}
+          {% if health_check.status != 200 %}
+          Health Check Error: {{ health_check.msg | default('Unknown error') }}
+          {% endif %}
+          {% else %}
+          Service Status: Would be started and enabled
+          Binary Version: Would be otel-contrib v{{ otel_version }}
+          Health Check: Would verify metrics endpoint
+          Metrics Endpoint: Would be accessible at http://localhost:8888/metrics
+          {% endif %}
+
+          New Installation Details:
+          - Service: otelcol-contrib (systemd managed)
+          - Binary: {{ otel_home }}/otelcol-contrib
+          - Config: {{ otel_config_dir }}/config.yaml
+          - Logs: {{ otel_log_dir }}/otelcol.log
+          - Metrics: http://localhost:8888/metrics
+
+          Management Commands:
+          - Status: systemctl status otelcol-contrib
+          - Logs: journalctl -u otelcol-contrib -f
+          - Restart: systemctl restart otelcol-contrib
+
+          Remember to manually update the placeholder values in:
+          - {{ otel_config_dir }}/config.yaml
+          - {{ lxc_metrics_script_path }} (if you choose to update environment variables there)
+
+    - name: Show troubleshooting info for failed health checks
+      debug:
+        msg: |
+          === TROUBLESHOOTING INFO ===
+          If the health check failed, run these commands on {{ inventory_hostname }}:
+          - Check service status: systemctl status otelcol-contrib
+          - Check logs: journalctl -u otelcol-contrib -n 20
+          - Check config: sudo -u otelcol cat {{ otel_config_dir }}/config.yaml
+          - Test metrics endpoint: curl http://localhost:8888/metrics
+      when: not ansible_check_mode and health_check.status != 200
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+      when: not ansible_check_mode
+
+    - name: restart otelcol
+      systemd:
+        name: otelcol-contrib
+        state: restarted
+      when: not ansible_check_mode

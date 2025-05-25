@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenTelemetry LXC Metrics Exporter
+After=network.target
+
+[Service]
+ExecStartPre=/opt/otelcol-contrib/lxc-comprehensive-metrics.sh # Run script once before starting server
+ExecStart=/bin/bash -c 'while true; do printf "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\r\n"; cat /tmp/lxc_metrics.prom; done | nc -lp 9100' # Or socat if preferred
+Restart=always
+User=otelcol
+Group=otelcol
+StandardOutput=journal
+StandardError=journal
+WorkingDirectory=/opt/otelcol-contrib
+
+[Install]
+WantedBy=multi-user.target

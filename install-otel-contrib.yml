@@ -1,14 +1,6 @@
 - name: Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector Contrib
   hosts: debian
   become: yes
-  vars_prompt:
-    - name: otel_endpoint
-      prompt: "Enter your OTEL-LGTM stack endpoint (e.g., http://your-lgtm-stack:4317)"
-      private: no
-    - name: otel_headers
-      prompt: "Enter any additional headers (optional, format: key1=value1,key2=value2)"
-      private: no
-      default: ""
 
   vars:
     otel_version: "0.126.0"

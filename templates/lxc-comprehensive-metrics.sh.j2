@@ -1,12 +1,12 @@
 #!/bin/bash
 # lxc-comprehensive-metrics.sh.j2
 
-# Resource attributes (will be added by the OpenTelemetry Collector's resource processor)
-# HOSTNAME will be automatically added as 'host.name' by the collector's facts gathering.
-# Other labels like SERVICE_NAME, CTID, VID, ZONE will be added by the collector's resource processor.
-# The script no longer needs to use these environment variables for its output.
+# Define the output file for Prometheus metrics
+METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/lxc_metrics.prom"
 
-TIMESTAMP=$(date +%s)
+# Create the directory if it doesn't exist and ensure ownership
+mkdir -p "$(dirname "$METRICS_OUTPUT_FILE")"
+chown otelcol:otelcol "$(dirname "$METRICS_OUTPUT_FILE")"
 
 # Function to output metric with minimal labels (only those inherent to the metric itself)
 output_metric() {
@@ -14,127 +14,140 @@ output_metric() {
     local metric_type=$2
     local value=$3
     local additional_labels=$4 # For labels like 'filesystem' or 'interface' which are part of the metric's identity
-   
+    
     echo "# TYPE $metric_name $metric_type"
     echo "${metric_name}{${additional_labels}} $value $TIMESTAMP"
 }
 
-echo "# OpenTelemetry metrics for LXC"
+# --- Start of Metric Generation ---
+# All script output from here will be redirected to the METRICS_OUTPUT_FILE
+{
+    echo "# OpenTelemetry metrics for LXC"
+    TIMESTAMP=$(date +%s) # Timestamp for Prometheus exposition format
 
-# === MEMORY METRICS ===
-MEMORY_INFO=$(free -b)
-TOTAL_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $2}')
-USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
-FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
-AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
-CACHED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $6}')
-BUFFER_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $5}')
+    # === MEMORY METRICS ===
+    MEMORY_INFO=$(free -b)
+    TOTAL_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $2}')
+    USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
+    FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
+    AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
+    CACHED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $6}')
+    BUFFER_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $5}')
 
-output_metric "lxc_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
-output_metric "lxc_memory_used_bytes" "gauge" "$USED_MEM" ""
-output_metric "lxc_memory_free_bytes" "gauge" "$FREE_MEM" ""
-output_metric "lxc_memory_available_bytes" "gauge" "$AVAILABLE_MEM" ""
-output_metric "lxc_memory_cached_bytes" "gauge" "$CACHED_MEM" ""
-output_metric "lxc_memory_buffer_bytes" "gauge" "$BUFFER_MEM" ""
+    output_metric "lxc_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
+    output_metric "lxc_memory_used_bytes" "gauge" "$USED_MEM" ""
+    output_metric "lxc_memory_free_bytes" "gauge" "$FREE_MEM" ""
+    output_metric "lxc_memory_available_bytes" "gauge" "$AVAILABLE_MEM" ""
+    output_metric "lxc_memory_cached_bytes" "gauge" "$CACHED_MEM" ""
+    output_metric "lxc_memory_buffer_bytes" "gauge" "$BUFFER_MEM" ""
 
-# Memory utilization percentage
-MEMORY_UTIL=$(echo "scale=2; $USED_MEM * 100 / $TOTAL_MEM" | bc -l)
-output_metric "lxc_memory_utilization_percent" "gauge" "$MEMORY_UTIL" ""
-
-# === DISK METRICS ===
-df -B1 | grep -E '^/dev/' | while read filesystem size used available percent mountpoint; do
-    # Clean up mountpoint for label (replace / with _root, remove special chars)
-    mount_label=$(echo "$mountpoint" | sed 's|^/$|root|' | sed 's|/|_|g' | sed 's/[^a-zA-Z0-9_]/_/g')
-    filesystem_label=$(echo "$filesystem" | sed 's|/dev/||' | sed 's/[^a-zA-Z0-9_]/_/g')
-   
-    output_metric "lxc_disk_total_bytes" "gauge" "$size" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-    output_metric "lxc_disk_used_bytes" "gauge" "$used" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-    output_metric "lxc_disk_available_bytes" "gauge" "$available" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-   
-    # Disk utilization percentage
-    if [ "$size" -gt 0 ]; then
-        disk_util=$(echo "scale=2; $used * 100 / $size" | bc -l)
-        output_metric "lxc_disk_utilization_percent" "gauge" "$disk_util" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
+    # Memory utilization percentage
+    # Check for division by zero
+    if [ "$TOTAL_MEM" -gt 0 ]; then
+        MEMORY_UTIL=$(echo "scale=2; $USED_MEM * 100 / $TOTAL_MEM" | bc -l)
+        output_metric "lxc_memory_utilization_percent" "gauge" "$MEMORY_UTIL" ""
     fi
-done
 
-# === CPU METRICS ===
-CPU_COUNT=$(nproc)
-output_metric "lxc_cpu_count" "gauge" "$CPU_COUNT" ""
-
-# Load averages
-LOAD_AVGS=$(cat /proc/loadavg)
-LOAD_1=$(echo $LOAD_AVGS | awk '{print $1}')
-LOAD_5=$(echo $LOAD_AVGS | awk '{print $2}')
-LOAD_15=$(echo $LOAD_AVGS | awk '{print $3}')
-
-output_metric "lxc_load_1min" "gauge" "$LOAD_1" ""
-output_metric "lxc_load_5min" "gauge" "$LOAD_5" ""
-output_metric "lxc_load_15min" "gauge" "$LOAD_15" ""
-
-# CPU utilization (using /proc/stat for more accuracy)
-if [ -f /proc/stat ]; then
-    CPU_STATS=$(head -n1 /proc/stat | awk '{print $2,$3,$4,$5,$6,$7,$8}')
-    read user nice system idle iowait irq softirq <<< $CPU_STATS
-   
-    total=$((user + nice + system + idle + iowait + irq + softirq))
-    used=$((total - idle))
-   
-    if [ "$total" -gt 0 ]; then
-        cpu_util=$(echo "scale=2; $used * 100 / $total" | bc -l)
-        output_metric "lxc_cpu_utilization_percent" "gauge" "$cpu_util" ""
-    fi
-fi
-
-# === NETWORK METRICS ===
-# Get network interfaces (excluding loopback)
-ip -o link show | grep -v loopback | while read -r num interface details; do
-    # Clean interface name
-    iface=$(echo $interface | sed 's/:$//')
-   
-    # Skip if interface is down
-    if echo $details | grep -q "state DOWN"; then
-        continue
-    fi
-   
-    # Get interface statistics
-    if [ -f "/sys/class/net/$iface/statistics/rx_bytes" ]; then
-        rx_bytes=$(cat /sys/class/net/$iface/statistics/rx_bytes)
-        tx_bytes=$(cat /sys/class/net/$iface/statistics/tx_bytes)
-        rx_packets=$(cat /sys/class/net/$iface/statistics/rx_packets)
-        tx_packets=$(cat /sys/class/net/$iface/statistics/tx_packets)
-        rx_errors=$(cat /sys/class/net/$iface/statistics/rx_errors)
-        tx_errors=$(cat /sys/class/net/$iface/statistics/tx_errors)
-        rx_dropped=$(cat /sys/class/net/$iface/statistics/rx_dropped)
-        tx_dropped=$(cat /sys/class/net/$iface/statistics/tx_dropped)
-       
-        # Get interface speed if available
-        speed="unknown"
-        if [ -f "/sys/class/net/$iface/speed" ]; then
-            speed=$(cat /sys/class/net/$iface/speed 2>/dev/null || echo "unknown")
+    # === DISK METRICS ===
+    df -B1 | grep -E '^/dev/' | while read filesystem size used available percent mountpoint; do
+        # Clean up mountpoint for label (replace / with _root, remove special chars)
+        mount_label=$(echo "$mountpoint" | sed 's|^/$|root|' | sed 's|/|_|g' | sed 's/[^a-zA-Z0-9_]/_/g')
+        filesystem_label=$(echo "$filesystem" | sed 's|/dev/||' | sed 's/[^a-zA-Z0-9_]/_/g') # Not directly used in labels now, but kept for reference
+        
+        output_metric "lxc_disk_total_bytes" "gauge" "$size" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
+        output_metric "lxc_disk_used_bytes" "gauge" "$used" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
+        output_metric "lxc_disk_available_bytes" "gauge" "$available" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
+        
+        # Disk utilization percentage
+        if [ "$size" -gt 0 ]; then
+            disk_util=$(echo "scale=2; $used * 100 / $size" | bc -l)
+            output_metric "lxc_disk_utilization_percent" "gauge" "$disk_util" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
         fi
-       
-        # Get MTU
-        mtu=$(cat /sys/class/net/$iface/mtu 2>/dev/null || echo "unknown")
-       
-        # Output network metrics
-        output_metric "lxc_network_rx_bytes" "counter" "$rx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_tx_bytes" "counter" "$tx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_rx_packets" "counter" "$rx_packets" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_tx_packets" "counter" "$tx_packets" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_rx_errors" "counter" "$rx_errors" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_tx_errors" "counter" "$tx_errors" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_rx_dropped" "counter" "$rx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
-        output_metric "lxc_network_tx_dropped" "counter" "$tx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+    done
+
+    # === CPU METRICS ===
+    CPU_COUNT=$(nproc)
+    output_metric "lxc_cpu_count" "gauge" "$CPU_COUNT" ""
+
+    # Load averages
+    LOAD_AVGS=$(cat /proc/loadavg)
+    LOAD_1=$(echo $LOAD_AVGS | awk '{print $1}')
+    LOAD_5=$(echo $LOAD_AVGS | awk '{print $2}')
+    LOAD_15=$(echo $LOAD_AVGS | awk '{print $3}')
+
+    output_metric "lxc_load_1min" "gauge" "$LOAD_1" ""
+    output_metric "lxc_load_5min" "gauge" "$LOAD_5" ""
+    output_metric "lxc_load_15min" "gauge" "$LOAD_15" ""
+
+    # CPU utilization (using /proc/stat for more accuracy)
+    if [ -f /proc/stat ]; then
+        CPU_STATS=$(head -n1 /proc/stat | awk '{print $2,$3,$4,$5,$6,$7,$8}')
+        read user nice system idle iowait irq softirq <<< $CPU_STATS
+        
+        total=$((user + nice + system + idle + iowait + irq + softirq))
+        used=$((total - idle))
+        
+        if [ "$total" -gt 0 ]; then
+            cpu_util=$(echo "scale=2; $used * 100 / $total" | bc -l)
+            output_metric "lxc_cpu_utilization_percent" "gauge" "$cpu_util" ""
+        fi
     fi
-done
 
-# === SYSTEM UPTIME ===
-UPTIME_SECONDS=$(cat /proc/uptime | awk '{print $1}')
-output_metric "lxc_uptime_seconds" "gauge" "$UPTIME_SECONDS" ""
+    # === NETWORK METRICS ===
+    # Get network interfaces (excluding loopback)
+    ip -o link show | grep -v loopback | while read -r num interface details; do
+        # Clean interface name
+        iface=$(echo $interface | sed 's/:$//')
+        
+        # Skip if interface is down
+        if echo "$details" | grep -q "state DOWN"; then
+            continue
+        fi
+        
+        # Get interface statistics
+        if [ -f "/sys/class/net/$iface/statistics/rx_bytes" ]; then
+            rx_bytes=$(cat /sys/class/net/$iface/statistics/rx_bytes)
+            tx_bytes=$(cat /sys/class/net/$iface/statistics/tx_bytes)
+            rx_packets=$(cat /sys/class/net/$iface/statistics/rx_packets)
+            tx_packets=$(cat /sys/class/net/$iface/statistics/tx_packets)
+            rx_errors=$(cat /sys/class/net/$iface/statistics/rx_errors)
+            tx_errors=$(cat /sys/class/net/$iface/statistics/tx_errors)
+            rx_dropped=$(cat /sys/class/net/$iface/statistics/rx_dropped)
+            tx_dropped=$(cat /sys/class/net/$iface/statistics/tx_dropped)
+            
+            # Get interface speed if available
+            speed="unknown"
+            if [ -f "/sys/class/net/$iface/speed" ]; then
+                speed=$(cat "/sys/class/net/$iface/speed" 2>/dev/null || echo "unknown")
+            fi
+            
+            # Get MTU
+            mtu=$(cat "/sys/class/net/$iface/mtu" 2>/dev/null || echo "unknown")
+            
+            # Output network metrics
+            output_metric "lxc_network_rx_bytes" "counter" "$rx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_tx_bytes" "counter" "$tx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_rx_packets" "counter" "$rx_packets" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_tx_packets" "counter" "$tx_packets" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_rx_errors" "counter" "$rx_errors" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_tx_errors" "counter" "$tx_errors" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_rx_dropped" "counter" "$rx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+            output_metric "lxc_network_tx_dropped" "counter" "$tx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+    done
 
-# === PROCESS COUNT ===
-PROCESS_COUNT=$(ps aux | wc -l)
-output_metric "lxc_process_count" "gauge" "$PROCESS_COUNT" ""
+    # === SYSTEM UPTIME ===
+    UPTIME_SECONDS=$(cat /proc/uptime | awk '{print $1}')
+    output_metric "lxc_uptime_seconds" "gauge" "$UPTIME_SECONDS" ""
 
-echo "# End of metrics"
+    # === PROCESS COUNT ===
+    PROCESS_COUNT=$(ps aux | wc -l)
+    output_metric "lxc_process_count" "gauge" "$PROCESS_COUNT" ""
+
+    echo "# End of metrics"
+
+} > "$METRICS_OUTPUT_FILE" # Redirect all standard output of this block to the file
+
+# Ensure the metrics file has correct permissions after writing
+chmod 644 "$METRICS_OUTPUT_FILE"
+chown otelcol:otelcol "$METRICS_OUTPUT_FILE"

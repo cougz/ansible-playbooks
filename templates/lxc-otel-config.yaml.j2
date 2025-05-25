@@ -1,42 +1,9 @@
 receivers:
-  # Receiver for general system metrics from the host
-  hostmetrics:
-    collection_interval: 30s
-    scrapers:
-      cpu:
-        metrics:
-          system.cpu.utilization: {enabled: true}
-      disk:
-        metrics:
-          system.disk.io: {enabled: true}
-      filesystem:
-        metrics:
-          system.filesystem.usage: {enabled: true}
-          system.filesystem.utilization: {enabled: true}
-      load:
-        metrics:
-          system.cpu.load_average.1m: {enabled: true}
-          system.cpu.load_average.5m: {enabled: true}
-          system.cpu.load_average.15m: {enabled: true}
-      memory:
-        metrics:
-          system.memory.usage: {enabled: true}
-          system.memory.utilization: {enabled: true}
-      network:
-        metrics:
-          system.network.io: {enabled: true}
-          system.network.packets: {enabled: true}
-          system.network.errors: {enabled: true}
-          system.network.dropped: {enabled: true}
-      processes:
-        metrics:
-          system.processes.count: {enabled: true}
-
   # Receiver for LXC metrics from universal script
   prometheus:
     config:
       scrape_configs:
-        - job_name: 'lxc-script-metrics'
+        - job_name: 'lxc-metrics-script.sh'
           scrape_interval: 30s
           static_configs:
             - targets: ['localhost:9100']
@@ -98,7 +65,7 @@ service:
   extensions: [health_check]
   pipelines:
     metrics:
-      receivers: [hostmetrics, prometheus, otlp]
+      receivers: [prometheus, otlp]
       processors: [memory_limiter, attributes, batch]  # attributes processor adds labels that become Prometheus labels
       exporters: [otlp, debug]
     traces:

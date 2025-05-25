@@ -282,20 +282,39 @@
         name: otelcol-contrib
         state: started
         enabled: yes
+      when: not ansible_check_mode
+
+    - name: Display service start info (check mode)
+      debug:
+        msg: "Would start and enable otelcol-contrib systemd service"
+      when: ansible_check_mode
 
     - name: Wait for service to start
       pause:
         seconds: 10
+      when: not ansible_check_mode
 
     - name: Check OpenTelemetry Collector service status
       systemd:
         name: otelcol-contrib
       register: otel_service_status
+      when: not ansible_check_mode
+
+    - name: Display service check info (check mode)
+      debug:
+        msg: "Would check otelcol-contrib service status after startup"
+      when: ansible_check_mode
 
     - name: Verify collector binary version
       shell: "{{ otel_home }}/otelcol-contrib --version"
       register: otel_version_check
       changed_when: false
+      when: not ansible_check_mode
+
+    - name: Display version check info (check mode)
+      debug:
+        msg: "Would verify otelcol-contrib binary version"
+      when: ansible_check_mode
 
     - name: Verify collector is responding on metrics endpoint
       uri:
@@ -306,15 +325,28 @@
       retries: 3
       delay: 5
       ignore_errors: yes
+      when: not ansible_check_mode
+
+    - name: Display health check info (check mode)
+      debug:
+        msg: "Would verify collector metrics endpoint at http://localhost:8888/metrics"
+      when: ansible_check_mode
 
     - name: Display migration results
       debug:
         msg: |
           === MIGRATION COMPLETE ===
+          {% if not ansible_check_mode %}
           Service Status: {{ otel_service_status.status.ActiveState }}
           Binary Version: {{ otel_version_check.stdout }}
           Health Check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
           Metrics Endpoint: {{ 'Accessible' if health_check.status == 200 else 'Not accessible' }}
+          {% else %}
+          Service Status: Would be started and enabled
+          Binary Version: Would be otel-contrib v{{ otel_version }}
+          Health Check: Would verify metrics endpoint
+          Metrics Endpoint: Would be accessible at http://localhost:8888/metrics
+          {% endif %}
           
           New Installation Details:
           - Service: otelcol-contrib (systemd managed)
@@ -339,10 +371,21 @@
         systemctl is-enabled otelcol-contrib || echo "✗ Service not enabled"
       register: final_verification
       changed_when: false
+      when: not ansible_check_mode
+
+    - name: Display final verification info (check mode)
+      debug:
+        msg: |
+          === FINAL VERIFICATION (CHECK MODE) ===
+          Old supervisor service: Would be completely removed
+          New systemd service: Would be active and running
+          New service enabled: Would be enabled for auto-start
+      when: ansible_check_mode
 
     - name: Display final verification
       debug:
         msg: "{{ final_verification.stdout_lines }}"
+      when: not ansible_check_mode
 
   handlers:
     - name: reload systemd

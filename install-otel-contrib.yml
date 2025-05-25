@@ -391,8 +391,10 @@
     - name: reload systemd
       systemd:
         daemon_reload: yes
+      when: not ansible_check_mode
 
     - name: restart otelcol
       systemd:
         name: otelcol-contrib
         state: restarted
+      when: not ansible_check_mode

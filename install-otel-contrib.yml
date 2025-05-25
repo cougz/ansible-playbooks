@@ -1,0 +1,358 @@
+---
+- name: Clean Install OpenTelemetry Collector Contrib
+  hosts: debian_servers
+  become: yes
+  vars_prompt:
+    - name: otel_endpoint
+      prompt: "Enter your OTEL-LGTM stack endpoint (e.g., http://your-lgtm-stack:4317)"
+      private: no
+    - name: otel_headers
+      prompt: "Enter any additional headers (optional, format: key1=value1,key2=value2)"
+      private: no
+      default: ""
+
+  vars:
+    otel_version: "0.126.0"
+    otel_user: "otelcol"
+    otel_group: "otelcol"
+    otel_home: "/opt/otelcol-contrib"
+    otel_config_dir: "/etc/otelcol-contrib"
+    otel_log_dir: "/var/log/otelcol-contrib"
+    # Old installation paths for cleanup
+    old_otel_paths:
+      - "/etc/otel"
+      - "/var/log/otel"
+      - "/usr/local/bin/otelcol"
+      - "/etc/supervisor/conf.d/otel-collector.conf"
+      - "/etc/otel-agent-install.sh"
+
+  tasks:
+    # ============= CLEANUP EXISTING INSTALLATION =============
+    - name: Check if old supervisor-managed OpenTelemetry is running
+      shell: supervisorctl status otel-collector 2>/dev/null || echo "not_found"
+      register: old_otel_status
+      changed_when: false
+      failed_when: false
+
+    - name: Stop old OpenTelemetry collector via supervisor
+      supervisorctl:
+        name: otel-collector
+        state: stopped
+      when: "'RUNNING' in old_otel_status.stdout"
+      ignore_errors: yes
+
+    - name: Remove old supervisor configuration
+      file:
+        path: /etc/supervisor/conf.d/otel-collector.conf
+        state: absent
+      notify: reload supervisor
+
+    - name: Reload supervisor configuration to remove old program
+      supervisorctl:
+        name: all
+        state: present
+      ignore_errors: yes
+
+    - name: Remove old OpenTelemetry binary
+      file:
+        path: /usr/local/bin/otelcol
+        state: absent
+
+    - name: Remove old OpenTelemetry directories and files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ old_otel_paths }}"
+
+    - name: Check if old systemd otelcol service exists
+      stat:
+        path: /etc/systemd/system/otelcol.service
+      register: old_systemd_service
+
+    - name: Stop and disable old systemd otelcol service
+      systemd:
+        name: otelcol
+        state: stopped
+        enabled: no
+        daemon_reload: yes
+      when: old_systemd_service.stat.exists
+      ignore_errors: yes
+
+    - name: Remove old systemd service file
+      file:
+        path: /etc/systemd/system/otelcol.service
+        state: absent
+      when: old_systemd_service.stat.exists
+
+    # ============= INSTALL NEW OTEL-CONTRIB =============
+    - name: Create OpenTelemetry group
+      group:
+        name: "{{ otel_group }}"
+        system: yes
+
+    - name: Create OpenTelemetry user
+      user:
+        name: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        system: yes
+        shell: /bin/false
+        home: "{{ otel_home }}"
+        create_home: no
+
+    - name: Create OpenTelemetry directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0755'
+      loop:
+        - "{{ otel_home }}"
+        - "{{ otel_config_dir }}"
+        - "{{ otel_log_dir }}"
+
+    - name: Download OpenTelemetry Collector Contrib
+      get_url:
+        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz"
+        dest: "/tmp/otelcol-contrib.tar.gz"
+        mode: '0644'
+        timeout: 60
+
+    - name: Extract OpenTelemetry Collector
+      unarchive:
+        src: "/tmp/otelcol-contrib.tar.gz"
+        dest: "{{ otel_home }}"
+        remote_src: yes
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        creates: "{{ otel_home }}/otelcol-contrib"
+
+    - name: Create OpenTelemetry Collector configuration
+      template:
+        src: otel-config.yaml.j2
+        dest: "{{ otel_config_dir }}/config.yaml"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0644'
+      notify: restart otelcol
+
+    - name: Create OpenTelemetry systemd service
+      template:
+        src: otelcol-contrib.service.j2
+        dest: /etc/systemd/system/otelcol-contrib.service
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart otelcol
+
+    - name: Install required packages for system monitoring
+      apt:
+        name:
+          - procfs
+          - sysstat
+        state: present
+        update_cache: yes
+
+    - name: Clean up downloaded archive
+      file:
+        path: "/tmp/otelcol-contrib.tar.gz"
+        state: absent
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable OpenTelemetry Collector service
+      systemd:
+        name: otelcol-contrib
+        state: started
+        enabled: yes
+
+    - name: Wait for service to start
+      pause:
+        seconds: 5
+
+    - name: Check OpenTelemetry Collector service status
+      systemd:
+        name: otelcol-contrib
+      register: otel_service_status
+
+    - name: Display service status
+      debug:
+        msg: "OpenTelemetry Collector Contrib service is {{ otel_service_status.status.ActiveState }}"
+
+    - name: Verify collector is responding
+      uri:
+        url: "http://localhost:8888/metrics"
+        method: GET
+        timeout: 10
+      register: health_check
+      retries: 3
+      delay: 5
+      ignore_errors: yes
+
+    - name: Display health check result
+      debug:
+        msg: "Health check {{ 'PASSED' if health_check.status == 200 else 'FAILED' }} - Collector metrics endpoint is {{ 'accessible' if health_check.status == 200 else 'not accessible' }}"
+
+  handlers:
+    - name: reload supervisor
+      supervisorctl:
+        name: all
+        state: present
+      ignore_errors: yes
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart otelcol
+      systemd:
+        name: otelcol-contrib
+        state: restarted
+
+---
+# templates/otel-config.yaml.j2
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+          system.cpu.time:
+            enabled: true
+      disk:
+        metrics:
+          system.disk.io:
+            enabled: true
+          system.disk.io_time:
+            enabled: true
+          system.disk.operation_time:
+            enabled: true
+          system.filesystem.usage:
+            enabled: true
+          system.filesystem.utilization:
+            enabled: true
+      load:
+        metrics:
+          system.cpu.load_average.1m:
+            enabled: true
+          system.cpu.load_average.5m:
+            enabled: true
+          system.cpu.load_average.15m:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.usage:
+            enabled: true
+          system.memory.utilization:
+            enabled: true
+      network:
+        metrics:
+          system.network.io:
+            enabled: true
+          system.network.packets:
+            enabled: true
+          system.network.errors:
+            enabled: true
+          system.network.dropped:
+            enabled: true
+          system.network.connections:
+            enabled: true
+      paging:
+        metrics:
+          system.paging.usage:
+            enabled: true
+          system.paging.operations:
+            enabled: true
+      processes:
+        metrics:
+          system.processes.count:
+            enabled: true
+          system.processes.created:
+            enabled: true
+
+  # Optional: Keep OTLP receiver for application telemetry
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+  
+  resourcedetection:
+    detectors: [env, system, docker]
+    timeout: 5s
+    override: false
+    
+  resource:
+    attributes:
+      - key: service.name
+        value: "system-metrics"
+        action: upsert
+      - key: service.version
+        value: "1.0.0"
+        action: upsert
+      - key: service.instance.id
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: deployment.environment
+        value: "{{ ansible_env.ENVIRONMENT | default('production') }}"
+        action: upsert
+      - key: host.name
+        value: "{{ inventory_hostname }}"
+        action: upsert
+      - key: os.type
+        value: "linux"
+        action: upsert
+
+exporters:
+  otlp:
+    endpoint: "{{ otel_endpoint }}"
+    {% if otel_headers != "" %}
+    headers:
+      {% for header in otel_headers.split(',') %}
+      {% set key_value = header.split('=') %}
+      {{ key_value[0].strip() }}: "{{ key_value[1].strip() }}"
+      {% endfor %}
+    {% endif %}
+    tls:
+      insecure: true
+  
+  logging:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp, logging]
+    
+    # Optional: Keep traces and logs pipelines for application telemetry
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp]
+    
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp]
+  
+  extensions: []
+  
+  telemetry:
+    logs:
+      level: info
+      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
+    metrics:
+      level: basic
+      address: 0.0.0.0:8888

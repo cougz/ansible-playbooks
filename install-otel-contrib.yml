@@ -1,36 +1,31 @@
----
-- name: Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector Contrib
+- name: >-
+    Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector
+    Contrib
   hosts: debian
-  gather_facts: no
-  become: yes
-
+  gather_facts: 'no'
+  become: 'yes'
   vars:
-    otel_version: "0.126.0"
-    otel_user: "otelcol"
-    otel_group: "otelcol"
-    otel_home: "/opt/otelcol-contrib"
-    otel_config_dir: "/etc/otelcol-contrib"
-    otel_log_dir: "/var/log/otelcol-contrib"
-
+    otel_version: 0.126.0
+    otel_user: otelcol
+    otel_group: otelcol
+    otel_home: /opt/otelcol-contrib
+    otel_config_dir: /etc/otelcol-contrib
+    otel_log_dir: /var/log/otelcol-contrib
   tasks:
-    # ============= VALIDATE SURVEY VARIABLES =============
     - name: Validate survey variables
       block:
         - name: Check if otel_endpoint is provided
           fail:
-            msg: "OTEL endpoint must be provided via Survey variable 'otel_endpoint'"
+            msg: OTEL endpoint must be provided via Survey variable 'otel_endpoint'
           when: otel_endpoint is not defined or otel_endpoint == ''
           run_once: true
-
         - name: Set default otel_headers if not provided
           set_fact:
-            otel_headers: ""
+            otel_headers: ''
           when: otel_headers is not defined
           run_once: true
-
     - name: Gather facts for target machines
-      setup:
-
+      setup: null
     - name: Display migration info
       debug:
         msg: |
@@ -42,223 +37,217 @@
           OTel Version: {{ otel_version }}
           Migration: supervisor → systemd (otel-contrib)
           ===============================================
-
-    # ============= COMPLETE REMOVAL OF OLD SUPERVISOR INSTALLATION =============
     - name: Display migration start message
       debug:
-        msg: "Starting migration from supervisor-managed OpenTelemetry to systemd otel-contrib"
-
+        msg: >-
+          Starting migration from supervisor-managed OpenTelemetry to systemd
+          otel-contrib
     - name: Check current supervisor OpenTelemetry status
       shell: supervisorctl status otel-collector 2>/dev/null || echo "not_found"
       register: current_otel_status
       changed_when: false
       failed_when: false
-
     - name: Display current OpenTelemetry status
       debug:
-        msg: "Current supervisor OpenTelemetry status: {{ current_otel_status.stdout }}"
-
+        msg: >-
+          Current supervisor OpenTelemetry status: {{ current_otel_status.stdout
+          }}
     - name: Stop OpenTelemetry collector via supervisor
       supervisorctl:
         name: otel-collector
         state: stopped
-      when: "'not_found' not in current_otel_status.stdout"
-      ignore_errors: yes
-
+      when: '''not_found'' not in current_otel_status.stdout'
+      ignore_errors: 'yes'
     - name: Remove OpenTelemetry from supervisor management
       shell: |
         supervisorctl remove otel-collector 2>/dev/null || true
         supervisorctl reread 2>/dev/null || true
         supervisorctl update 2>/dev/null || true
-      ignore_errors: yes
-
+      ignore_errors: 'yes'
     - name: Remove supervisor configuration file
       file:
         path: /etc/supervisor/conf.d/otel-collector.conf
         state: absent
-
     - name: Kill any remaining OpenTelemetry processes
-      shell: |
+      shell: >
         # Kill processes matching the old installation pattern
-        pkill -f "/usr/local/bin/otelcol.*--config=/etc/otel/config.yaml" || true
-        pkill -f "otel-collector" || true
-        sleep 3
-      ignore_errors: yes
 
+        pkill -f "/usr/local/bin/otelcol.*--config=/etc/otel/config.yaml" ||
+        true
+
+        pkill -f "otel-collector" || true
+
+        sleep 3
+      ignore_errors: 'yes'
     - name: Remove old OpenTelemetry binary
       file:
         path: /usr/local/bin/otelcol
         state: absent
-
     - name: Remove old OpenTelemetry configuration directory
       file:
         path: /etc/otel
         state: absent
-
     - name: Remove old OpenTelemetry log directory
       file:
         path: /var/log/otel
         state: absent
-
     - name: Remove old installation script
       file:
         path: /etc/otel-agent-install.sh
         state: absent
-
     - name: Clean up any old systemd services
       block:
         - name: Check for old systemd otelcol service
           stat:
             path: /etc/systemd/system/otelcol.service
           register: old_systemd_service
-
         - name: Stop and disable old systemd otelcol service
           systemd:
             name: otelcol
             state: stopped
-            enabled: no
-            daemon_reload: yes
+            enabled: 'no'
+            daemon_reload: 'yes'
           when: old_systemd_service.stat.exists
-          ignore_errors: yes
-
+          ignore_errors: 'yes'
         - name: Remove old systemd service file
           file:
             path: /etc/systemd/system/otelcol.service
             state: absent
           when: old_systemd_service.stat.exists
-
         - name: Force removal of old processes if still running
           shell: |
             pkill -f "otelcol.*--config=/etc/otel/config.yaml" || true
             sleep 2
-          ignore_errors: yes
-
+          ignore_errors: 'yes'
     - name: Verify complete cleanup
-      shell: |
+      shell: >
         echo "=== POST-CLEANUP VERIFICATION ==="
+
         echo "1. Supervisor status:"
-        supervisorctl status otel-collector 2>/dev/null || echo "✓ otel-collector removed from supervisor"
+
+        supervisorctl status otel-collector 2>/dev/null || echo "✓
+        otel-collector removed from supervisor"
+
         echo "2. Old binary:"
+
         ls -la /usr/local/bin/otelcol 2>/dev/null || echo "✓ Old binary removed"
+
         echo "3. Old config directory:"
+
         ls -la /etc/otel/ 2>/dev/null || echo "✓ Old config directory removed"
+
         echo "4. Old log directory:"
+
         ls -la /var/log/otel/ 2>/dev/null || echo "✓ Old log directory removed"
+
         echo "5. Supervisor config:"
-        ls -la /etc/supervisor/conf.d/otel-collector.conf 2>/dev/null || echo "✓ Supervisor config removed"
+
+        ls -la /etc/supervisor/conf.d/otel-collector.conf 2>/dev/null || echo "✓
+        Supervisor config removed"
+
         echo "6. Running processes:"
+
         pgrep -f otelcol || echo "✓ No old otelcol processes running"
       register: cleanup_verification
       changed_when: false
-
     - name: Display cleanup verification
       debug:
-        msg: "{{ cleanup_verification.stdout_lines }}"
-
-    # ============= INSTALL NEW OTEL-CONTRIB WITH SYSTEMD =============
+        msg: '{{ cleanup_verification.stdout_lines }}'
     - name: Create OpenTelemetry group
       group:
-        name: "{{ otel_group }}"
-        system: yes
-
+        name: '{{ otel_group }}'
+        system: 'yes'
     - name: Create OpenTelemetry user
       user:
-        name: "{{ otel_user }}"
-        group: "{{ otel_group }}"
-        system: yes
+        name: '{{ otel_user }}'
+        group: '{{ otel_group }}'
+        system: 'yes'
         shell: /bin/false
-        home: "{{ otel_home }}"
-        create_home: no
-
+        home: '{{ otel_home }}'
+        create_home: 'no'
     - name: Create OpenTelemetry directories
       file:
-        path: "{{ item }}"
+        path: '{{ item }}'
         state: directory
         mode: '0755'
       loop:
-        - "{{ otel_home }}"
-        - "{{ otel_config_dir }}"
-        - "{{ otel_log_dir }}"
-
+        - '{{ otel_home }}'
+        - '{{ otel_config_dir }}'
+        - '{{ otel_log_dir }}'
     - name: Set proper ownership on OpenTelemetry directories
       file:
-        path: "{{ item }}"
-        owner: "{{ otel_user }}"
-        group: "{{ otel_group }}"
-        recurse: yes
+        path: '{{ item }}'
+        owner: '{{ otel_user }}'
+        group: '{{ otel_group }}'
+        recurse: 'yes'
       loop:
-        - "{{ otel_home }}"
-        - "{{ otel_config_dir }}"
-        - "{{ otel_log_dir }}"
+        - '{{ otel_home }}'
+        - '{{ otel_config_dir }}'
+        - '{{ otel_log_dir }}'
       when: not ansible_check_mode
-
     - name: Display directory ownership info (check mode)
       debug:
-        msg: "Would set ownership {{ otel_user }}:{{ otel_group }} on OpenTelemetry directories"
+        msg: >-
+          Would set ownership {{ otel_user }}:{{ otel_group }} on OpenTelemetry
+          directories
       when: ansible_check_mode
-
     - name: Download OpenTelemetry Collector Contrib
       get_url:
-        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz"
-        dest: "/tmp/otelcol-contrib.tar.gz"
+        url: >-
+          https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{
+          otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz
+        dest: /tmp/otelcol-contrib.tar.gz
         mode: '0644'
         timeout: 120
-
     - name: Extract OpenTelemetry Collector Contrib
       unarchive:
-        src: "/tmp/otelcol-contrib.tar.gz"
-        dest: "{{ otel_home }}"
-        remote_src: yes
-        creates: "{{ otel_home }}/otelcol-contrib"
-      become: yes
+        src: /tmp/otelcol-contrib.tar.gz
+        dest: '{{ otel_home }}'
+        remote_src: 'yes'
+        creates: '{{ otel_home }}/otelcol-contrib'
+      become: 'yes'
       when: not ansible_check_mode
-
     - name: Display extraction info (check mode)
       debug:
-        msg: "Would extract otelcol-contrib archive to {{ otel_home }}"
+        msg: 'Would extract otelcol-contrib archive to {{ otel_home }}'
       when: ansible_check_mode
-
     - name: Set executable permissions on otelcol-contrib binary
       file:
-        path: "{{ otel_home }}/otelcol-contrib"
+        path: '{{ otel_home }}/otelcol-contrib'
         mode: '0755'
       when: not ansible_check_mode
-
     - name: Display binary permissions info (check mode)
       debug:
-        msg: "Would set executable permissions on {{ otel_home }}/otelcol-contrib"
+        msg: 'Would set executable permissions on {{ otel_home }}/otelcol-contrib'
       when: ansible_check_mode
-
     - name: Fix ownership on extracted files
       file:
-        path: "{{ otel_home }}"
-        owner: "{{ otel_user }}"
-        group: "{{ otel_group }}"
-        recurse: yes
+        path: '{{ otel_home }}'
+        owner: '{{ otel_user }}'
+        group: '{{ otel_group }}'
+        recurse: 'yes'
       when: not ansible_check_mode
-
     - name: Display ownership info (check mode)
       debug:
-        msg: "Would set ownership {{ otel_user }}:{{ otel_group }} on {{ otel_home }}"
+        msg: >-
+          Would set ownership {{ otel_user }}:{{ otel_group }} on {{ otel_home
+          }}
       when: ansible_check_mode
-
     - name: Create OpenTelemetry Collector configuration
       template:
         src: otel-config.yaml.j2
-        dest: "{{ otel_config_dir }}/config.yaml"
-        owner: "{{ otel_user if not ansible_check_mode else omit }}"
-        group: "{{ otel_group if not ansible_check_mode else omit }}"
+        dest: '{{ otel_config_dir }}/config.yaml'
+        owner: '{{ otel_user if not ansible_check_mode else omit }}'
+        group: '{{ otel_group if not ansible_check_mode else omit }}'
         mode: '0644'
       notify: restart otelcol
-
     - name: Ensure config file is readable by otelcol user
       file:
-        path: "{{ otel_config_dir }}/config.yaml"
-        owner: "{{ otel_user }}"
-        group: "{{ otel_group }}"
+        path: '{{ otel_config_dir }}/config.yaml'
+        owner: '{{ otel_user }}'
+        group: '{{ otel_group }}'
         mode: '0644'
       when: not ansible_check_mode
-
     - name: Create OpenTelemetry systemd service
       template:
         src: otelcol-contrib.service.j2
@@ -267,189 +256,238 @@
       notify:
         - reload systemd
         - restart otelcol
-
     - name: Install required packages for system monitoring
       apt:
         name:
           - procps
           - sysstat
         state: present
-        update_cache: yes
-
+        update_cache: 'yes'
     - name: Clean up downloaded archive
       file:
-        path: "/tmp/otelcol-contrib.tar.gz"
+        path: /tmp/otelcol-contrib.tar.gz
         state: absent
-
     - name: Reload systemd daemon
       systemd:
-        daemon_reload: yes
-
-    # ============= LXC CONTAINER METRICS SETUP =============
+        daemon_reload: 'yes'
     - name: Ensure access to cgroups
       file:
         path: /sys/fs/cgroup
         state: directory
         mode: '0755'
-      ignore_errors: yes
-
+      ignore_errors: 'yes'
     - name: Check cgroup memory path exists
       stat:
         path: /sys/fs/cgroup/memory
       register: cgroup_memory_path
-      ignore_errors: yes
-
+      ignore_errors: 'yes'
     - name: Display cgroup system info
       debug:
-        msg: "Cgroups memory path exists: {{ cgroup_memory_path.stat.exists | default(false) }}"
-
+        msg: >-
+          Cgroups memory path exists: {{ cgroup_memory_path.stat.exists |
+          default(false) }}
     - name: Create diagnostic script to identify container memory metrics
       copy:
-        dest: "/tmp/container-metrics-debug.sh"
-        mode: 0755
-        content: |
+        dest: /tmp/container-metrics-debug.sh
+        mode: 493
+        content: >
           #!/bin/bash
+
           echo "=== Container Metrics Debug Info ==="
+
           echo "Hostname: $(hostname)"
+
           echo ""
+
           echo "Memory Information:"
+
           free -m
+
           echo ""
-          echo "Container cgroup paths:"
-          find /sys/fs/cgroup -name "*$(hostname)*" 2>/dev/null
+
+          echo "Systemd service status:"
+
+          systemctl status otelcol-contrib
+
           echo ""
-          echo "Memory limits:"
-          cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo "No memory limit file found"
+
+          echo "Service logs:"
+
+          journalctl -u otelcol-contrib -n 20
+
           echo ""
-          echo "Active cgroups:"
-          ls -la /sys/fs/cgroup/
+
+          echo "Configuration file contents:"
+
+          cat /etc/otelcol-contrib/config.yaml
+
           echo ""
+
+          echo "Testing local metrics endpoint:"
+
+          curl -v http://127.0.0.1:8888/metrics 2>&1 || echo "Failed to connect
+          to metrics endpoint"
+
+          echo ""
+
+          echo "OpenTelemetry collector version:"
+
+          /opt/otelcol-contrib/otelcol-contrib --version
+
+          echo ""
+
           echo "Process namespaces:"
+
           ls -la /proc/self/ns/
       when: not ansible_check_mode
-
     - name: Run diagnostic script
       shell: /tmp/container-metrics-debug.sh
       register: container_metrics_debug
       changed_when: false
       when: not ansible_check_mode
-
     - name: Display container metrics debug info
       debug:
-        msg: "{{ container_metrics_debug.stdout_lines }}"
+        msg: '{{ container_metrics_debug.stdout_lines }}'
       when: not ansible_check_mode
-
-    # ============= START AND VERIFY SERVICES =============
     - name: Start and enable OpenTelemetry Collector service
       systemd:
         name: otelcol-contrib
         state: started
-        enabled: yes
+        enabled: 'yes'
       when: not ansible_check_mode
-
     - name: Display service start info (check mode)
       debug:
-        msg: "Would start and enable otelcol-contrib systemd service"
+        msg: Would start and enable otelcol-contrib systemd service
       when: ansible_check_mode
-
     - name: Wait for service to start
       pause:
         seconds: 15
       when: not ansible_check_mode
-
     - name: Check OpenTelemetry Collector service status
       systemd:
         name: otelcol-contrib
       register: otel_service_status
       when: not ansible_check_mode
-
     - name: Display service check info (check mode)
       debug:
-        msg: "Would check otelcol-contrib service status after startup"
+        msg: Would check otelcol-contrib service status after startup
       when: ansible_check_mode
-
     - name: Verify collector binary version
-      shell: "{{ otel_home }}/otelcol-contrib --version"
+      shell: '{{ otel_home }}/otelcol-contrib --version'
       register: otel_version_check
       changed_when: false
       when: not ansible_check_mode
-
     - name: Display version check info (check mode)
       debug:
-        msg: "Would verify otelcol-contrib binary version"
+        msg: Would verify otelcol-contrib binary version
       when: ansible_check_mode
-
     - name: Verify collector is responding on metrics endpoint
       uri:
-        url: "http://localhost:8888/metrics"
+        url: 'http://localhost:8888/metrics'
         method: GET
         timeout: 15
       register: health_check
       retries: 5
       delay: 3
-      ignore_errors: yes
+      ignore_errors: 'yes'
       when: not ansible_check_mode
-
     - name: Display health check info (check mode)
       debug:
-        msg: "Would verify collector metrics endpoint at http://localhost:8888/metrics"
+        msg: >-
+          Would verify collector metrics endpoint at
+          http://localhost:8888/metrics
       when: ansible_check_mode
-
     - name: Display migration results
       debug:
-        msg: |
+        msg: >
           === MIGRATION COMPLETE ===
-          {% if not ansible_check_mode %}
-          Service Status: {{ otel_service_status.status.ActiveState }}
-          Binary Version: {{ otel_version_check.stdout }}
-          Health Check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
-          Metrics Endpoint: {{ 'Accessible' if health_check.status == 200 else 'Not accessible' }}
-          {% if health_check.status != 200 %}
-          Health Check Error: {{ health_check.msg | default('Unknown error') }}
-          {% endif %}
-          {% else %}
-          Service Status: Would be started and enabled
-          Binary Version: Would be otel-contrib v{{ otel_version }}
-          Health Check: Would verify metrics endpoint
-          Metrics Endpoint: Would be accessible at http://localhost:8888/metrics
-          {% endif %}
-          
-          New Installation Details:
-          - Service: otelcol-contrib (systemd managed)
-          - Binary: {{ otel_home }}/otelcol-contrib
-          - Config: {{ otel_config_dir }}/config.yaml
-          - Logs: {{ otel_log_dir }}/otelcol.log
-          - Metrics: http://localhost:8888/metrics
-          
-          Management Commands:
-          - Status: systemctl status otelcol-contrib
-          - Logs: journalctl -u otelcol-contrib -f
-          - Restart: systemctl restart otelcol-contrib
 
+          {% if not ansible_check_mode %}
+
+          Service Status: {{ otel_service_status.status.ActiveState }}
+
+          Binary Version: {{ otel_version_check.stdout }}
+
+          Health Check: {{ 'PASSED' if health_check.status == 200 else 'FAILED'
+          }}
+
+          Metrics Endpoint: {{ 'Accessible' if health_check.status == 200 else
+          'Not accessible' }}
+
+          {% if health_check.status != 200 %}
+
+          Health Check Error: {{ health_check.msg | default('Unknown error') }}
+
+          {% endif %}
+
+          {% else %}
+
+          Service Status: Would be started and enabled
+
+          Binary Version: Would be otel-contrib v{{ otel_version }}
+
+          Health Check: Would verify metrics endpoint
+
+          Metrics Endpoint: Would be accessible at http://localhost:8888/metrics
+
+          {% endif %}
+
+
+          New Installation Details:
+
+          - Service: otelcol-contrib (systemd managed)
+
+          - Binary: {{ otel_home }}/otelcol-contrib
+
+          - Config: {{ otel_config_dir }}/config.yaml
+
+          - Logs: {{ otel_log_dir }}/otelcol.log
+
+          - Metrics: http://localhost:8888/metrics
+
+
+          Management Commands:
+
+          - Status: systemctl status otelcol-contrib
+
+          - Logs: journalctl -u otelcol-contrib -f
+
+          - Restart: systemctl restart otelcol-contrib
     - name: Show troubleshooting info for failed health checks
       debug:
-        msg: |
+        msg: >
           === TROUBLESHOOTING INFO ===
-          If the health check failed, run these commands on {{ inventory_hostname }}:
+
+          If the health check failed, run these commands on {{
+          inventory_hostname }}:
+
           - Check service status: systemctl status otelcol-contrib
+
           - Check logs: journalctl -u otelcol-contrib -n 20
+
           - Check config: sudo -u otelcol cat {{ otel_config_dir }}/config.yaml
+
           - Test metrics endpoint: curl http://localhost:8888/metrics
       when: not ansible_check_mode and health_check.status != 200
-
     - name: Final verification
-      shell: |
+      shell: >
         echo "=== FINAL VERIFICATION ==="
+
         echo "Old supervisor service:"
-        supervisorctl status otel-collector 2>/dev/null || echo "✓ Completely removed"
+
+        supervisorctl status otel-collector 2>/dev/null || echo "✓ Completely
+        removed"
+
         echo "New systemd service:"
+
         systemctl is-active otelcol-contrib || echo "✗ Service not active"
+
         echo "New service enabled:"
+
         systemctl is-enabled otelcol-contrib || echo "✗ Service not enabled"
       register: final_verification
       changed_when: false
       when: not ansible_check_mode
-
     - name: Display final verification info (check mode)
       debug:
         msg: |
@@ -458,18 +496,15 @@
           New systemd service: Would be active and running
           New service enabled: Would be enabled for auto-start
       when: ansible_check_mode
-
     - name: Display final verification
       debug:
-        msg: "{{ final_verification.stdout_lines }}"
+        msg: '{{ final_verification.stdout_lines }}'
       when: not ansible_check_mode
-
   handlers:
     - name: reload systemd
       systemd:
-        daemon_reload: yes
+        daemon_reload: 'yes'
       when: not ansible_check_mode
-
     - name: restart otelcol
       systemd:
         name: otelcol-contrib

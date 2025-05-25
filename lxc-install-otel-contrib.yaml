@@ -172,13 +172,6 @@
       systemd:
         daemon_reload: yes
 
-    - name: Ensure access to cgroups (for hostmetrics receiver, if running outside container)
-      file:
-        path: /sys/fs/cgroup
-        state: directory
-        mode: '0755'
-      ignore_errors: yes # May not be fully accessible within an unprivileged LXC
-
     - name: Start and enable OpenTelemetry Collector service
       systemd:
         name: otelcol-contrib

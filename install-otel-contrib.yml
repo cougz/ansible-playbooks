@@ -251,6 +251,14 @@
         mode: '0644'
       notify: restart otelcol
 
+    - name: Ensure config file is readable by otelcol user
+      file:
+        path: "{{ otel_config_dir }}/config.yaml"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0644'
+      when: not ansible_check_mode
+
     - name: Create OpenTelemetry systemd service
       template:
         src: otelcol-contrib.service.j2
@@ -291,7 +299,7 @@
 
     - name: Wait for service to start
       pause:
-        seconds: 10
+        seconds: 15
       when: not ansible_check_mode
 
     - name: Check OpenTelemetry Collector service status
@@ -320,10 +328,10 @@
       uri:
         url: "http://localhost:8888/metrics"
         method: GET
-        timeout: 10
+        timeout: 15
       register: health_check
-      retries: 3
-      delay: 5
+      retries: 5
+      delay: 3
       ignore_errors: yes
       when: not ansible_check_mode
 

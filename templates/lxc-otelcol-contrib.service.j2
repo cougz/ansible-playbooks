@@ -1,0 +1,56 @@
+[Unit]
+Description=OpenTelemetry Collector Contrib
+Documentation=https://opentelemetry.io/docs/collector/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# User and group to run the service as
+User={{ otel_user }}
+Group={{ otel_group }}
+
+# Set the working directory
+WorkingDirectory={{ otel_home }}
+
+# Path to the collector binary and configuration file
+ExecStart={{ otel_home }}/otelcol-contrib --config={{ otel_config_dir }}/config.yaml
+
+# Environment variables for the collector (e.g., for proxy settings or other runtime configs)
+# Environment="HTTP_PROXY=http://proxy.example.com:8080"
+# Environment="NO_PROXY=localhost,127.0.0.1"
+
+# Restart policy
+Restart=always
+RestartSec=5s
+
+# Limit the number of open files and processes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+
+# Standard output and error to journald
+StandardOutput=journal
+StandardError=journal
+
+# Increase the start-up timeout to allow for network initialization
+TimeoutStartSec=60
+
+# Protect from unexpected writes to files and directories
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Read-only access to /etc, except for specific directories
+ReadWritePaths={{ otel_config_dir }} {{ otel_log_dir }}
+ReadOnlyPaths=/etc/ssl/certs /usr/local/share/ca-certificates /etc/pki
+
+# Ensure the collector can access necessary system metrics
+# This might need adjustment depending on your LXC setup and if it's privileged/unprivileged.
+# For privileged LXCs, /proc and /sys should typically be accessible.
+# For unprivileged LXCs, the hostmetrics receiver might need host bind mounts for /proc, /sys, /var/run/docker.sock, etc.
+# However, your script already gets metrics from /proc and /sys, so this is mainly for the hostmetrics receiver itself.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+
+[Install]
+WantedBy=multi-user.target

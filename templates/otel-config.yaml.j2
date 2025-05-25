@@ -17,6 +17,8 @@ receivers:
             enabled: true
           system.disk.operation_time:
             enabled: true
+      filesystem:
+        metrics:
           system.filesystem.usage:
             enabled: true
           system.filesystem.utilization:
@@ -100,17 +102,19 @@ processors:
 exporters:
   otlp:
     endpoint: "{{ otel_endpoint }}"
-    {% if otel_headers != "" %}
+    {% if otel_headers != "" and otel_headers is defined -%}
     headers:
-      {% for header in otel_headers.split(',') %}
-      {% set key_value = header.split('=') %}
+      {% for header in otel_headers.split(',') -%}
+      {% set key_value = header.split('=') -%}
+      {% if key_value | length == 2 -%}
       {{ key_value[0].strip() }}: "{{ key_value[1].strip() }}"
-      {% endfor %}
-    {% endif %}
+      {% endif -%}
+      {% endfor -%}
+    {% endif -%}
     tls:
       insecure: true
   
-  logging:
+  debug:
     verbosity: basic
 
 service:
@@ -119,7 +123,7 @@ service:
     metrics:
       receivers: [hostmetrics, otlp]
       processors: [resourcedetection, resource, batch]
-      exporters: [otlp, logging]
+      exporters: [otlp, debug]
     
     # Application telemetry pipelines (matching your old setup)
     traces:

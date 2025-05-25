@@ -349,6 +349,9 @@
           Binary Version: {{ otel_version_check.stdout }}
           Health Check: {{ 'PASSED' if health_check.status == 200 else 'FAILED' }}
           Metrics Endpoint: {{ 'Accessible' if health_check.status == 200 else 'Not accessible' }}
+          {% if health_check.status != 200 %}
+          Health Check Error: {{ health_check.msg | default('Unknown error') }}
+          {% endif %}
           {% else %}
           Service Status: Would be started and enabled
           Binary Version: Would be otel-contrib v{{ otel_version }}
@@ -367,6 +370,17 @@
           - Status: systemctl status otelcol-contrib
           - Logs: journalctl -u otelcol-contrib -f
           - Restart: systemctl restart otelcol-contrib
+
+    - name: Show troubleshooting info for failed health checks
+      debug:
+        msg: |
+          === TROUBLESHOOTING INFO ===
+          If the health check failed, run these commands on {{ inventory_hostname }}:
+          - Check service status: systemctl status otelcol-contrib
+          - Check logs: journalctl -u otelcol-contrib -n 20
+          - Check config: sudo -u otelcol cat {{ otel_config_dir }}/config.yaml
+          - Test metrics endpoint: curl http://localhost:8888/metrics
+      when: not ansible_check_mode and health_check.status != 200
 
     - name: Final verification
       shell: |

@@ -48,38 +48,38 @@ output_metric() {
     fi
 
     # === DISK METRICS ===
-    # Use df / -h and parse the output properly
-    df_output=$(df / | tail -n1)
+    # Use df -h and convert to bytes
+    df_output=$(df -h / | tail -n1)
     filesystem=$(echo "$df_output" | awk '{print $1}')
-    size_kb=$(echo "$df_output" | awk '{print $2}')
-    used_kb=$(echo "$df_output" | awk '{print $3}')
-    avail_kb=$(echo "$df_output" | awk '{print $4}')
+    size_human=$(echo "$df_output" | awk '{print $2}')
+    used_human=$(echo "$df_output" | awk '{print $3}')
+    avail_human=$(echo "$df_output" | awk '{print $4}')
     use_percent=$(echo "$df_output" | awk '{print $5}' | sed 's/%//')
     mountpoint=$(echo "$df_output" | awk '{print $6}')
     
-    # Convert KB to bytes (df reports in 1K blocks by default)
-    size_bytes=$((size_kb * 1024))
-    used_bytes=$((used_kb * 1024))
-    avail_bytes=$((avail_kb * 1024))
+    # Convert human readable sizes to bytes
+    convert_to_bytes() {
+        local size=$1
+        local number=$(echo "$size" | sed 's/[KMGT]$//')
+        local unit=$(echo "$size" | sed 's/[0-9.]*//g')
+        
+        case "$unit" in
+            "K") echo "$number * 1024" | bc -l | cut -d. -f1 ;;
+            "M") echo "$number * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+            "G") echo "$number * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+            "T") echo "$number * 1024 * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+            *) echo "$number" | cut -d. -f1 ;;  # Already in bytes
+        esac
+    }
+    
+    size_bytes=$(convert_to_bytes "$size_human")
+    used_bytes=$(convert_to_bytes "$used_human")
+    avail_bytes=$(convert_to_bytes "$avail_human")
     
     output_metric "lxc_disk_total_bytes" "gauge" "$size_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
     output_metric "lxc_disk_used_bytes" "gauge" "$used_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
     output_metric "lxc_disk_available_bytes" "gauge" "$avail_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
     output_metric "lxc_disk_utilization_percent" "gauge" "$use_percent" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
-
-    # === CPU METRICS ===
-    CPU_COUNT=$(nproc)
-    output_metric "lxc_cpu_count" "gauge" "$CPU_COUNT" ""
-
-    # Load averages
-    LOAD_AVGS=$(cat /proc/loadavg)
-    LOAD_1=$(echo $LOAD_AVGS | awk '{print $1}')
-    LOAD_5=$(echo $LOAD_AVGS | awk '{print $2}')
-    LOAD_15=$(echo $LOAD_AVGS | awk '{print $3}')
-
-    output_metric "lxc_load_1min" "gauge" "$LOAD_1" ""
-    output_metric "lxc_load_5min" "gauge" "$LOAD_5" ""
-    output_metric "lxc_load_15min" "gauge" "$LOAD_15" ""
 
     # === CPU METRICS ===
     CPU_COUNT=$(nproc)
@@ -110,10 +110,18 @@ output_metric() {
     fi
 
     # === NETWORK METRICS ===
-    # Get network interfaces (excluding loopback)
-    ip -o link show | grep -v loopback | while read -r num interface details; do
+    # Save network interface list to temp file to avoid subshell issues
+    TEMP_NET_FILE="/tmp/net_interfaces_$$"
+    ip -o link show | grep -v loopback > "$TEMP_NET_FILE"
+    
+    while IFS= read -r line; do
+        # Parse interface line  
+        num=$(echo $line | awk '{print $1}' | sed 's/:$//')
+        interface=$(echo $line | awk '{print $2}' | sed 's/:$//')
+        details=$(echo $line | cut -d' ' -f3-)
+        
         # Clean interface name
-        iface=$(echo $interface | sed 's/:$//')
+        iface="$interface"
         
         # Skip if interface is down
         if echo "$details" | grep -q "state DOWN"; then
@@ -150,7 +158,10 @@ output_metric() {
             output_metric "lxc_network_rx_dropped" "counter" "$rx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
             output_metric "lxc_network_tx_dropped" "counter" "$tx_dropped" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
         fi
-    done
+    done < "$TEMP_NET_FILE"
+    
+    # Clean up temp file
+    rm -f "$TEMP_NET_FILE"
 
     # === SYSTEM UPTIME ===
     UPTIME_SECONDS=$(cat /proc/uptime | awk '{print $1}')

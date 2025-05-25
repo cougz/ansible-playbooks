@@ -32,11 +32,15 @@ receivers:
         metrics:
           system.processes.count: {enabled: true}
 
-  # Receiver for LXC metrics from your custom script
-  prometheus_exec:
-    command: "{{ lxc_metrics_script_path }}" # Path to your script, defined in playbook vars
-    scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}"
-    # Removed: 'env' section. All resource labels are now managed by the 'resource' processor.
+  # Receiver for LXC metrics from your custom script served via a Python web server
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'lxc-script-metrics'
+          scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}" # Use existing interval variable
+          static_configs:
+            - targets: ['localhost:9100'] # Flask app runs on this port
+          metrics_path: /metrics # Flask app serves metrics on /metrics endpoint
 
   # OTLP receiver for applications or other telemetry sources
   otlp:
@@ -117,7 +121,7 @@ service:
   extensions: [health_check]
   pipelines:
     metrics:
-      receivers: [hostmetrics, prometheus_exec, otlp]
+      receivers: [hostmetrics, prometheus, otlp] # Changed from prometheus_exec to prometheus
       processors: [memory_limiter, resource, batch]
       exporters: [otlp, debug] # Remove 'debug' for production
     traces:

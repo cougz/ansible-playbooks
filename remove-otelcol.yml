@@ -1,0 +1,270 @@
+---
+- name: "Complete OpenTelemetry Collector Removal"
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    # Define all possible installation paths and configurations
+    # Covers both script-based and ansible-based installations
+    otel_service_names:
+      - otelcol-contrib
+      - otelcol
+      - otel-collector
+    otel_binaries:
+      # Contrib installation paths
+      - /opt/otelcol-contrib/otelcol-contrib
+      - /usr/local/bin/otelcol-contrib
+      - /usr/bin/otelcol-contrib
+      # Script-based installation paths (basic collector)
+      - /usr/local/bin/otelcol
+      - /usr/bin/otelcol
+      # Alternative locations
+      - /opt/otelcol/
+
+  tasks:
+    - name: "Display removal banner"
+      debug:
+        msg: |
+          ===============================================
+          OpenTelemetry Collector Complete Removal
+          ===============================================
+          Target: {{ inventory_hostname }}
+          Removing all OTel installations and configurations
+          ===============================================
+
+    - name: "Stop all possible OpenTelemetry systemd services"
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+        daemon_reload: yes
+      loop: "{{ otel_service_names }}"
+      ignore_errors: yes
+      register: systemd_stop_result
+
+    - name: "Display systemd service stop results"
+      debug:
+        msg: "Service {{ item.item }}: {{ 'stopped' if item.changed else 'not found or already stopped' }}"
+      loop: "{{ systemd_stop_result.results }}"
+      when: item is defined
+
+    - name: "Stop OpenTelemetry via supervisor"
+      supervisorctl:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - otel-collector
+        - otelcol
+        - otelcol-contrib
+      ignore_errors: yes
+      register: supervisor_stop_result
+
+    - name: "Remove from supervisor management"
+      supervisorctl:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - otel-collector
+        - otelcol
+        - otelcol-contrib
+      ignore_errors: yes
+
+    - name: "Force kill any remaining OpenTelemetry processes"
+      shell: |
+        # Kill all possible otel processes
+        pkill -f "otelcol" || true
+        pkill -f "otel-collector" || true
+        pkill -f "opentelemetry" || true
+        sleep 3
+        # Force kill if still running
+        pkill -9 -f "otelcol" || true
+        pkill -9 -f "otel-collector" || true
+        pkill -9 -f "opentelemetry" || true
+      ignore_errors: yes
+      register: kill_processes
+
+    - name: "Verify no OpenTelemetry processes are running"
+      shell: ps aux | grep -E "(otelcol|otel-collector)" | grep -v grep || echo "No processes found"
+      register: remaining_processes
+      changed_when: false
+
+    - name: "Display remaining processes check"
+      debug:
+        msg: |
+          Remaining OTel processes check:
+          {{ remaining_processes.stdout }}
+
+    - name: "Remove systemd service files"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ systemd_services }}"
+      register: systemd_files_removed
+
+    - name: "Remove supervisor configuration files"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ supervisor_configs }}"
+      register: supervisor_files_removed
+
+    - name: "Reload systemd daemon after service file removal"
+      systemd:
+        daemon_reload: yes
+
+    - name: "Reload supervisor configuration"
+      supervisorctl:
+        name: all
+        state: reread
+      ignore_errors: yes
+
+    - name: "Remove OpenTelemetry binaries"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ otel_binaries }}"
+      register: binaries_removed
+
+    - name: "Remove OpenTelemetry directories and configurations"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ otel_directories }}"
+      register: directories_removed
+
+    - name: "Remove OpenTelemetry user"
+      user:
+        name: otelcol
+        state: absent
+        remove: yes
+      ignore_errors: yes
+
+    - name: "Remove OpenTelemetry group"
+      group:
+        name: otelcol
+        state: absent
+      ignore_errors: yes
+
+    - name: "Clean up any downloaded archives"
+      find:
+        paths:
+          - /tmp
+          - /var/tmp
+          - /root
+          - /home
+        patterns:
+          - "*otelcol*"
+          - "*opentelemetry*"
+          - "otelcol_*_linux_amd64.tar.gz"
+          - "otelcol-contrib_*_linux_amd64.tar.gz"
+          - "*.tar.gz"
+        recurse: yes
+      register: found_archives
+
+    - name: "Remove found OpenTelemetry archives"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ found_archives.files }}"
+      when: 
+        - found_archives.files is defined
+        - "'otelcol' in item.path or 'opentelemetry' in item.path"
+
+    - name: "Remove any installation scripts"
+      find:
+        paths:
+          - /tmp
+          - /root
+          - /home
+          - /opt
+        patterns:
+          - "*otel*install*"
+          - "*opentelemetry*install*"
+          - "install-otel*.sh"
+        recurse: yes
+      register: found_scripts
+
+    - name: "Remove found installation scripts"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ found_scripts.files }}"
+      when: found_scripts.files is defined
+
+    - name: "Check for script-based log files"
+      find:
+        paths:
+          - /var/log/otel
+        patterns:
+          - "collector.log*"
+        recurse: yes
+      register: script_log_files
+      ignore_errors: yes
+
+    - name: "Remove script-based collector log files"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ script_log_files.files }}"
+      when: script_log_files.files is defined
+
+    - name: "Check for any remaining OpenTelemetry references in crontab"
+      shell: crontab -l | grep -i otel || echo "No crontab entries found"
+      register: crontab_check
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "Display crontab check results"
+      debug:
+        msg: |
+          Crontab check for OpenTelemetry entries:
+          {{ crontab_check.stdout }}
+
+    - name: "Final verification - search for any remaining files"
+      shell: |
+        find / -name "*otelcol*" -o -name "*otel-collector*" 2>/dev/null | head -20 || echo "No remaining files found"
+      register: final_search
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "Display final verification"
+      debug:
+        msg: |
+          === REMOVAL VERIFICATION ===
+          Systemd services: {{ systemd_files_removed.results | selectattr('changed') | list | length }} removed
+          Supervisor configs: {{ supervisor_files_removed.results | selectattr('changed') | list | length }} removed
+          Binaries: {{ binaries_removed.results | selectattr('changed') | list | length }} removed
+          Directories: {{ directories_removed.results | selectattr('changed') | list | length }} removed
+          
+          Final file search:
+          {{ final_search.stdout }}
+          
+          === CLEANUP COMPLETE ===
+          All OpenTelemetry Collector installations have been removed.
+          
+          Recommended next steps:
+          1. Reboot the system to ensure all changes take effect
+          2. Verify no OpenTelemetry processes start on boot
+          3. Check system logs for any remaining references
+
+    - name: "Display removal summary"
+      debug:
+        msg: |
+          ===============================================
+          OpenTelemetry Collector Removal Summary
+          ===============================================
+          Host: {{ inventory_hostname }}
+          Status: REMOVAL COMPLETE
+          
+          What was removed:
+          - All systemd services (otelcol-contrib, otelcol, otel-collector)
+          - All supervisor configurations (including script-based otel-collector.conf)
+          - All binary files (both contrib and basic collector versions)
+          - All configuration directories (/etc/otel, /etc/otelcol-contrib, etc.)
+          - All log directories (/var/log/otel, /var/log/otelcol-contrib, etc.)
+          - Script-based installation files and logs
+          - User and group accounts
+          - Downloaded archives and installation files
+          
+          System is now clean of OpenTelemetry Collector installations.
+          ===============================================

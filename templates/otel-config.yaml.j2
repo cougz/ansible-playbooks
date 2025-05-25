@@ -62,6 +62,22 @@ receivers:
           system.processes.created:
             enabled: true
 
+  # Add cgroups receiver for accurate container-specific metrics
+  cgroups:
+    collection_interval: 30s
+    metrics_collection:
+      memory:
+        enabled: true
+      cpu:
+        enabled: true
+    # Configure for LXC container metrics
+    metrics_source:
+      memory:
+        source: memory.stat
+      cpu:
+        source: cpu.stat
+    cgroups_exclude_metrics: []
+
   # Keep OTLP receiver for application telemetry (matching your old setup)
   otlp:
     protocols:
@@ -76,13 +92,22 @@ processors:
     send_batch_size: 1024
   
   resourcedetection:
-    detectors: [env, system, docker]
+    detectors: [env, system]  # Remove docker detector as it doesn't work well with LXC
     timeout: 5s
-    override: false
+    override: true  # Change to true so container-specific info is not overridden
+    
+  # Add a filter processor to ensure we only get container-specific metrics
+  filter:
+    metrics:
+      include:
+        match_type: strict
+        resource_attributes:
+          - key: host.name
+            value: "{{ ansible_hostname }}"
     
   resource:
     attributes:
-      # Match the pattern from your old script
+      # Match the pattern from your old script but add container info
       - key: service.name
         value: "lxc-{{ ansible_hostname }}"
         action: upsert
@@ -98,6 +123,17 @@ processors:
       - key: deployment.environment
         value: "production"
         action: upsert
+      - key: container.name
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: container.type
+        value: "lxc"
+        action: upsert
+      # Add this to identify memory metrics properly
+      - key: container.memory.limit
+        value: "$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo unknown)"
+        action: upsert
+        from_attribute: true
 
 exporters:
   otlp:
@@ -117,31 +153,22 @@ exporters:
   debug:
     verbosity: basic
 
+extensions:
+  # Add memory limiter to ensure accurate memory reporting
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
 service:
+  extensions: [memory_limiter]
+  
   pipelines:
     # Host metrics pipeline
-    metrics:
-      receivers: [hostmetrics, otlp]
-      processors: [resourcedetection, resource, batch]
+    metrics/host:
+      receivers: [hostmetrics]
+      processors: [filter, resource, batch]
       exporters: [otlp, debug]
     
-    # Application telemetry pipelines (matching your old setup)
-    traces:
-      receivers: [otlp]
-      processors: [resource, batch]
-      exporters: [otlp]
-    
-    logs:
-      receivers: [otlp]
-      processors: [resource, batch]
-      exporters: [otlp]
-  
-  extensions: []
-  
-  telemetry:
-    logs:
-      level: info
-      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
-    metrics:
-      level: basic
-      address: 0.0.0.0:8888
+    # Container metrics pipeline (separate to ensure proper attribution)
+    metrics/

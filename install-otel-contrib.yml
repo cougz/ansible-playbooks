@@ -1,6 +1,6 @@
 ---
 - name: Clean Install OpenTelemetry Collector Contrib
-  hosts: debian_servers
+  hosts: debian
   become: yes
   vars_prompt:
     - name: otel_endpoint

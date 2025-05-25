@@ -192,6 +192,11 @@
         - "{{ otel_log_dir }}"
       when: not ansible_check_mode
 
+    - name: Display directory ownership info (check mode)
+      debug:
+        msg: "Would set ownership {{ otel_user }}:{{ otel_group }} on OpenTelemetry directories"
+      when: ansible_check_mode
+
     - name: Download OpenTelemetry Collector Contrib
       get_url:
         url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz"
@@ -206,12 +211,23 @@
         remote_src: yes
         creates: "{{ otel_home }}/otelcol-contrib"
       become: yes
+      when: not ansible_check_mode
+
+    - name: Display extraction info (check mode)
+      debug:
+        msg: "Would extract otelcol-contrib archive to {{ otel_home }}"
+      when: ansible_check_mode
 
     - name: Set executable permissions on otelcol-contrib binary
       file:
         path: "{{ otel_home }}/otelcol-contrib"
         mode: '0755'
       when: not ansible_check_mode
+
+    - name: Display binary permissions info (check mode)
+      debug:
+        msg: "Would set executable permissions on {{ otel_home }}/otelcol-contrib"
+      when: ansible_check_mode
 
     - name: Fix ownership on extracted files
       file:
@@ -220,6 +236,11 @@
         group: "{{ otel_group }}"
         recurse: yes
       when: not ansible_check_mode
+
+    - name: Display ownership info (check mode)
+      debug:
+        msg: "Would set ownership {{ otel_user }}:{{ otel_group }} on {{ otel_home }}"
+      when: ansible_check_mode
 
     - name: Create OpenTelemetry Collector configuration
       template:

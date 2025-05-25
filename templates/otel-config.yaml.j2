@@ -1,0 +1,144 @@
+# templates/otel-config.yaml.j2
+receivers:
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+          system.cpu.time:
+            enabled: true
+      disk:
+        metrics:
+          system.disk.io:
+            enabled: true
+          system.disk.io_time:
+            enabled: true
+          system.disk.operation_time:
+            enabled: true
+          system.filesystem.usage:
+            enabled: true
+          system.filesystem.utilization:
+            enabled: true
+      load:
+        metrics:
+          system.cpu.load_average.1m:
+            enabled: true
+          system.cpu.load_average.5m:
+            enabled: true
+          system.cpu.load_average.15m:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.usage:
+            enabled: true
+          system.memory.utilization:
+            enabled: true
+      network:
+        metrics:
+          system.network.io:
+            enabled: true
+          system.network.packets:
+            enabled: true
+          system.network.errors:
+            enabled: true
+          system.network.dropped:
+            enabled: true
+          system.network.connections:
+            enabled: true
+      paging:
+        metrics:
+          system.paging.usage:
+            enabled: true
+          system.paging.operations:
+            enabled: true
+      processes:
+        metrics:
+          system.processes.count:
+            enabled: true
+          system.processes.created:
+            enabled: true
+
+  # Optional: Keep OTLP receiver for application telemetry
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+  
+  resourcedetection:
+    detectors: [env, system, docker]
+    timeout: 5s
+    override: false
+    
+  resource:
+    attributes:
+      - key: service.name
+        value: "system-metrics"
+        action: upsert
+      - key: service.version
+        value: "1.0.0"
+        action: upsert
+      - key: service.instance.id
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: deployment.environment
+        value: "{{ ansible_env.ENVIRONMENT | default('production') }}"
+        action: upsert
+      - key: host.name
+        value: "{{ inventory_hostname }}"
+        action: upsert
+      - key: os.type
+        value: "linux"
+        action: upsert
+
+exporters:
+  otlp:
+    endpoint: "{{ otel_endpoint }}"
+    {% if otel_headers != "" %}
+    headers:
+      {% for header in otel_headers.split(',') %}
+      {% set key_value = header.split('=') %}
+      {{ key_value[0].strip() }}: "{{ key_value[1].strip() }}"
+      {% endfor %}
+    {% endif %}
+    tls:
+      insecure: true
+  
+  logging:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp, logging]
+    
+    # Optional: Keep traces and logs pipelines for application telemetry
+    traces:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp]
+    
+    logs:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch]
+      exporters: [otlp]
+  
+  extensions: []
+  
+  telemetry:
+    logs:
+      level: info
+      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
+    metrics:
+      level: basic
+      address: 0.0.0.0:8888

@@ -1,5 +1,5 @@
 - name: Migrate from Supervisor OpenTelemetry to SystemD OpenTelemetry Collector Contrib
-  hosts: debian
+  hosts: debian_servers
   become: yes
   vars_prompt:
     - name: otel_endpoint
@@ -19,6 +19,36 @@
     otel_log_dir: "/var/log/otelcol-contrib"
 
   tasks:
+    # ============= VALIDATE SURVEY VARIABLES =============
+    - name: Validate survey variables
+      block:
+        - name: Check if otel_endpoint is provided
+          fail:
+            msg: "OTEL endpoint must be provided via Survey variable 'otel_endpoint'"
+          when: otel_endpoint is not defined or otel_endpoint == ''
+          run_once: true
+
+        - name: Set default otel_headers if not provided
+          set_fact:
+            otel_headers: ""
+          when: otel_headers is not defined
+          run_once: true
+
+    - name: Gather facts for target machines
+      setup:
+
+    - name: Display migration info
+      debug:
+        msg: |
+          ===============================================
+          OpenTelemetry Migration (Supervisor → SystemD)
+          ===============================================
+          Target Endpoint: {{ otel_endpoint }}
+          Headers: {{ otel_headers if otel_headers != '' else 'None' }}
+          OTel Version: {{ otel_version }}
+          Migration: supervisor → systemd (otel-contrib)
+          ===============================================
+
     # ============= COMPLETE REMOVAL OF OLD SUPERVISOR INSTALLATION =============
     - name: Display migration start message
       debug:

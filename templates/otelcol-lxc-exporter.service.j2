@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenTelemetry LXC Metrics Exporter (Python)
+After=network.target
+
+[Service]
+ExecStartPre=/opt/otelcol-contrib/lxc-comprehensive-metrics.sh
+ExecStart=/usr/bin/python3 /opt/otelcol-contrib/otelcol-lxc-exporter.py
+Restart=on-failure
+RestartSec=5s
+User=otelcol
+Group=otelcol
+WorkingDirectory=/opt/otelcol-contrib
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

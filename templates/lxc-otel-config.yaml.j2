@@ -1,0 +1,156 @@
+# templates/lxc-otel-config.yaml.j2
+receivers:
+  # Receiver for general system metrics from the host
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization: {enabled: true}
+      disk:
+        metrics:
+          system.disk.io: {enabled: true}
+      filesystem:
+        metrics:
+          system.filesystem.usage: {enabled: true}
+          system.filesystem.utilization: {enabled: true}
+      load:
+        metrics:
+          system.cpu.load_average.1m: {enabled: true}
+          system.cpu.load_average.5m: {enabled: true}
+          system.cpu.load_average.15m: {enabled: true}
+      memory:
+        metrics:
+          system.memory.usage: {enabled: true}
+          system.memory.utilization: {enabled: true} # Percentage
+      network:
+        metrics:
+          system.network.io: {enabled: true}
+          system.network.packets: {enabled: true}
+          system.network.errors: {enabled: true}
+          system.network.dropped: {enabled: true}
+      processes:
+        metrics:
+          system.processes.count: {enabled: true}
+
+  # Receiver for LXC metrics from your custom script
+  prometheus_exec:
+    command: "{{ lxc_metrics_script_path }}" # Path to your script, defined in playbook vars
+    scrape_interval: "{{ lxc_metrics_scrape_interval | default('30s') }}"
+    # Pass Ansible variables as environment variables to the script
+    # This allows the script to use them for its own Prometheus labels
+    env:
+      - "SERVICE_NAME={{ lxc_servicename | default('unknown_lxc_app') }}"
+      - "CTID={{ lxc_ctid | default('unknown_ctid') }}"
+      - "VID={{ lxc_vid | default('unknown_vid') }}"
+      - "ZONE={{ lxc_zone | default('unknown_zone') }}"
+      # HOSTNAME is determined by the script itself using $(hostname)
+
+  # OTLP receiver for applications or other telemetry sources
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # Memory limiter to prevent the collector from using too much memory
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 75 # Percentage of total host memory
+    spike_limit_percentage: 20 # Additional burst capacity
+
+  # Resource processor to add common identifying attributes to all telemetry
+  resource:
+    attributes:
+      # Standard OpenTelemetry Semantic Conventions
+      - key: service.name # Application name
+        value: "{{ lxc_servicename | default('unknown_lxc_app') }}" # e.g., Nextcloud
+        action: upsert
+      - key: service.instance.id # Unique ID for this instance of the service/LXC
+        value: "{{ ansible_hostname }}-{{ lxc_ctid | default('no_ctid') }}" # Make it more unique
+        action: upsert
+      - key: host.name # Hostname of the LXC
+        value: "{{ ansible_hostname }}" # e.g., t-nextcloud1
+        action: upsert
+      - key: os.type
+        value: "linux"
+        action: upsert
+      - key: container.runtime
+        value: "lxc"
+        action: upsert
+      - key: container.id # Numeric LXC Container ID
+        value: "{{ lxc_ctid | default('unknown_ctid') }}" # e.g., 101207
+        action: upsert
+      - key: container.name # Friendly name for the container
+        value: "{{ ansible_hostname }}" # e.g., t-nextcloud1
+        action: upsert
+
+      # Custom attributes for LXC specific information
+      - key: lxc.vlan.id # VLAN ID
+        value: "{{ lxc_vid | default('unknown_vid') }}" # e.g., 101
+        action: upsert
+      - key: lxc.zone # Zone for the LXC
+        value: "{{ lxc_zone | default('unknown_zone') }}" # e.g., apps, infrastructure
+        action: upsert
+
+      # Other potentially useful attributes (already present from previous version)
+      - key: host.memory.total_bytes
+        value: "{{ ansible_memtotal_mb * 1024 * 1024 }}" # Convert MB to Bytes
+        action: upsert
+
+  # Batch processor to group telemetry data before exporting
+  batch:
+    timeout: 5s # Max time to wait before sending a batch
+    send_batch_size: 512 # Max number of items in a batch
+
+exporters:
+  # OTLP exporter to send data to your LGTM stack or other OTLP endpoint
+  otlp:
+    endpoint: "{{ otel_endpoint }}" # Your LGTM stack's OTLP endpoint
+    {% if otel_headers is defined and otel_headers != "" -%}
+    headers:
+      {% for header in otel_headers.split(',') -%}
+      {% set key_value = header.split('=') -%}
+      {% if key_value | length == 2 -%}
+      "{{ key_value[0].strip() }}": "{{ key_value[1].strip() }}"
+      {% endif -%}
+      {% endfor -%}
+    {% endif -%}
+    tls:
+      insecure: true # For production, set to false and configure TLS properly
+
+  # Debug exporter (optional, prints telemetry to collector logs)
+  debug:
+    verbosity: basic # Options: basic, normal, detailed
+
+extensions:
+  # Health check extension for monitoring collector status
+  health_check:
+    endpoint: "127.0.0.1:13133"
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [hostmetrics, prometheus_exec, otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp, debug] # Remove 'debug' for production
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlp]
+
+  # Collector's own telemetry settings
+  telemetry:
+    logs:
+      level: info # Collector's internal log level
+      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
+    metrics:
+      level: basic # Level of detail for collector's internal metrics
+      address: "127.0.0.1:8888" # Endpoint to scrape collector's own metrics

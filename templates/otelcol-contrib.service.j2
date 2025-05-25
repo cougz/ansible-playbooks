@@ -19,12 +19,12 @@ SyslogIdentifier=otelcol-contrib
 # Security settings
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
+ProtectSystem=full  # Changed from strict to full to allow cgroup access
 ProtectHome=true
-ReadWritePaths={{ otel_log_dir }}
+ReadWritePaths={{ otel_log_dir }} /sys/fs/cgroup /proc
 ProtectKernelTunables=true
 ProtectKernelModules=true
-ProtectControlGroups=true
+ProtectControlGroups=false  # Changed to false to allow cgroup access
 
 # Resource limits
 LimitNOFILE=65536

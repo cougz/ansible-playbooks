@@ -42,28 +42,44 @@ output_metric() {
     output_metric "lxc_memory_buffer_bytes" "gauge" "$BUFFER_MEM" ""
 
     # Memory utilization percentage
-    # Check for division by zero
     if [ "$TOTAL_MEM" -gt 0 ]; then
         MEMORY_UTIL=$(echo "scale=2; $USED_MEM * 100 / $TOTAL_MEM" | bc -l)
         output_metric "lxc_memory_utilization_percent" "gauge" "$MEMORY_UTIL" ""
     fi
 
     # === DISK METRICS ===
-    df -B1 | grep -E '^/dev/' | while read filesystem size used available percent mountpoint; do
-        # Clean up mountpoint for label (replace / with _root, remove special chars)
-        mount_label=$(echo "$mountpoint" | sed 's|^/$|root|' | sed 's|/|_|g' | sed 's/[^a-zA-Z0-9_]/_/g')
-        filesystem_label=$(echo "$filesystem" | sed 's|/dev/||' | sed 's/[^a-zA-Z0-9_]/_/g') # Not directly used in labels now, but kept for reference
-        
-        output_metric "lxc_disk_total_bytes" "gauge" "$size" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-        output_metric "lxc_disk_used_bytes" "gauge" "$used" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-        output_metric "lxc_disk_available_bytes" "gauge" "$available" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-        
-        # Disk utilization percentage
-        if [ "$size" -gt 0 ]; then
-            disk_util=$(echo "scale=2; $used * 100 / $size" | bc -l)
-            output_metric "lxc_disk_utilization_percent" "gauge" "$disk_util" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-        fi
-    done
+    # Use df / -h and parse the output properly
+    df_output=$(df / | tail -n1)
+    filesystem=$(echo "$df_output" | awk '{print $1}')
+    size_kb=$(echo "$df_output" | awk '{print $2}')
+    used_kb=$(echo "$df_output" | awk '{print $3}')
+    avail_kb=$(echo "$df_output" | awk '{print $4}')
+    use_percent=$(echo "$df_output" | awk '{print $5}' | sed 's/%//')
+    mountpoint=$(echo "$df_output" | awk '{print $6}')
+    
+    # Convert KB to bytes (df reports in 1K blocks by default)
+    size_bytes=$((size_kb * 1024))
+    used_bytes=$((used_kb * 1024))
+    avail_bytes=$((avail_kb * 1024))
+    
+    output_metric "lxc_disk_total_bytes" "gauge" "$size_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+    output_metric "lxc_disk_used_bytes" "gauge" "$used_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+    output_metric "lxc_disk_available_bytes" "gauge" "$avail_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+    output_metric "lxc_disk_utilization_percent" "gauge" "$use_percent" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+
+    # === CPU METRICS ===
+    CPU_COUNT=$(nproc)
+    output_metric "lxc_cpu_count" "gauge" "$CPU_COUNT" ""
+
+    # Load averages
+    LOAD_AVGS=$(cat /proc/loadavg)
+    LOAD_1=$(echo $LOAD_AVGS | awk '{print $1}')
+    LOAD_5=$(echo $LOAD_AVGS | awk '{print $2}')
+    LOAD_15=$(echo $LOAD_AVGS | awk '{print $3}')
+
+    output_metric "lxc_load_1min" "gauge" "$LOAD_1" ""
+    output_metric "lxc_load_5min" "gauge" "$LOAD_5" ""
+    output_metric "lxc_load_15min" "gauge" "$LOAD_15" ""
 
     # === CPU METRICS ===
     CPU_COUNT=$(nproc)

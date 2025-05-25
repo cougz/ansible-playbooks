@@ -15,7 +15,7 @@ output_metric() {
     local metric_type=$2
     local value=$3
     local additional_labels=$4
-    
+   
     echo "# TYPE $metric_name $metric_type"
     echo "${metric_name}{hostname=\"$HOSTNAME\",servicename=\"$SERVICE_NAME\",ctid=\"$CTID\",vid=\"$VID\",zone=\"$ZONE\"${additional_labels:+,$additional_labels}} $value $TIMESTAMP"
 }
@@ -47,11 +47,11 @@ df -B1 | grep -E '^/dev/' | while read filesystem size used available percent mo
     # Clean up mountpoint for label (replace / with _root, remove special chars)
     mount_label=$(echo "$mountpoint" | sed 's|^/$|root|' | sed 's|/|_|g' | sed 's/[^a-zA-Z0-9_]/_/g')
     filesystem_label=$(echo "$filesystem" | sed 's|/dev/||' | sed 's/[^a-zA-Z0-9_]/_/g')
-    
+   
     output_metric "lxc_disk_total_bytes" "gauge" "$size" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
     output_metric "lxc_disk_used_bytes" "gauge" "$used" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
     output_metric "lxc_disk_available_bytes" "gauge" "$available" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\",mount_label=\"$mount_label\""
-    
+   
     # Disk utilization percentage
     if [ "$size" -gt 0 ]; then
         disk_util=$(echo "scale=2; $used * 100 / $size" | bc -l)
@@ -77,10 +77,10 @@ output_metric "lxc_load_15min" "gauge" "$LOAD_15"
 if [ -f /proc/stat ]; then
     CPU_STATS=$(head -n1 /proc/stat | awk '{print $2,$3,$4,$5,$6,$7,$8}')
     read user nice system idle iowait irq softirq <<< $CPU_STATS
-    
+   
     total=$((user + nice + system + idle + iowait + irq + softirq))
     used=$((total - idle))
-    
+   
     if [ "$total" -gt 0 ]; then
         cpu_util=$(echo "scale=2; $used * 100 / $total" | bc -l)
         output_metric "lxc_cpu_utilization_percent" "gauge" "$cpu_util"
@@ -92,12 +92,12 @@ fi
 ip -o link show | grep -v loopback | while read -r num interface details; do
     # Clean interface name
     iface=$(echo $interface | sed 's/:$//')
-    
+   
     # Skip if interface is down
     if echo $details | grep -q "state DOWN"; then
         continue
     fi
-    
+   
     # Get interface statistics
     if [ -f "/sys/class/net/$iface/statistics/rx_bytes" ]; then
         rx_bytes=$(cat /sys/class/net/$iface/statistics/rx_bytes)
@@ -108,16 +108,16 @@ ip -o link show | grep -v loopback | while read -r num interface details; do
         tx_errors=$(cat /sys/class/net/$iface/statistics/tx_errors)
         rx_dropped=$(cat /sys/class/net/$iface/statistics/rx_dropped)
         tx_dropped=$(cat /sys/class/net/$iface/statistics/tx_dropped)
-        
+       
         # Get interface speed if available
         speed="unknown"
         if [ -f "/sys/class/net/$iface/speed" ]; then
             speed=$(cat /sys/class/net/$iface/speed 2>/dev/null || echo "unknown")
         fi
-        
+       
         # Get MTU
         mtu=$(cat /sys/class/net/$iface/mtu 2>/dev/null || echo "unknown")
-        
+       
         # Output network metrics
         output_metric "lxc_network_rx_bytes" "counter" "$rx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""
         output_metric "lxc_network_tx_bytes" "counter" "$tx_bytes" "interface=\"$iface\",speed=\"$speed\",mtu=\"$mtu\""

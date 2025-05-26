@@ -87,26 +87,36 @@ output_metric() {
 
     # Load averages
     LOAD_AVGS=$(cat /proc/loadavg)
-    LOAD_1=$(echo $LOAD_AVGS | awk '{print $1}')
-    LOAD_5=$(echo $LOAD_AVGS | awk '{print $2}')
-    LOAD_15=$(echo $LOAD_AVGS | awk '{print $3}')
+    LOAD_1=$(echo "$LOAD_AVGS" | awk '{print $1}')
+    LOAD_5=$(echo "$LOAD_AVGS" | awk '{print $2}')
+    LOAD_15=$(echo "$LOAD_AVGS" | awk '{print $3}')
 
     output_metric "lxc_load_1min" "gauge" "$LOAD_1" ""
     output_metric "lxc_load_5min" "gauge" "$LOAD_5" ""
     output_metric "lxc_load_15min" "gauge" "$LOAD_15" ""
 
-    # CPU utilization (using /proc/stat for more accuracy)
-    if [ -f /proc/stat ]; then
-        CPU_STATS=$(head -n1 /proc/stat | awk '{print $2,$3,$4,$5,$6,$7,$8}')
-        read user nice system idle iowait irq softirq <<< $CPU_STATS
+    # CPU utilization (using mpstat)
+    if command -v mpstat &> /dev/null; then
+        # Get %idle from mpstat (1 sample over 1 second for all CPUs)
+        # The output format of mpstat can vary slightly. This targets a common format.
+        # Example mpstat output line for "all":
+        # Linux 5.10.0-21-amd64 (hostname) 	03/20/2024 	_x86_64_	(4 CPU)
+        #
+        # 02:35:16 PM  CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+        # 02:35:17 PM  all    0.50    0.00    0.25    0.00    0.00    0.00    0.00    0.00    0.00   99.25
+        IDLE_PERCENT=$(mpstat 1 1 | awk '/^Average:|^[0-9]{2}:[0-9]{2}:[0-9]{2} [AP]M +all/ {print $NF}')
         
-        total=$((user + nice + system + idle + iowait + irq + softirq))
-        used=$((total - idle))
-        
-        if [ "$total" -gt 0 ]; then
-            cpu_util=$(echo "scale=2; $used * 100 / $total" | bc -l)
-            output_metric "lxc_cpu_utilization_percent" "gauge" "$cpu_util" ""
+        if [ -n "$IDLE_PERCENT" ]; then
+            CPU_UTIL=$(echo "scale=2; 100 - $IDLE_PERCENT" | bc -l)
+            output_metric "lxc_cpu_utilization_percent" "gauge" "$CPU_UTIL" ""
+        else
+            # Fallback if mpstat output parsing failed
+            output_metric "lxc_cpu_utilization_percent" "gauge" "0.00" "" # Or skip
         fi
+    else
+        # mpstat not found, can fallback to the /proc/stat method or skip
+        echo "# mpstat not found, skipping CPU utilization percent"
+        # Insert the /proc/stat sampling method from above here if desired as a fallback
     fi
 
     # === NETWORK METRICS ===

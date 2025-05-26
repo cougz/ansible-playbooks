@@ -1,5 +1,5 @@
 ---
-- name: Deploy New LXC Metrics Architecture with Background Collection
+- name: Deploy New LXC Metrics Architecture with Complete Cleanup
   hosts: debian
   become: yes # Required to write to /opt and restart services
   vars:
@@ -17,41 +17,74 @@
     bash_sampling_interval: 2       # seconds for internal bash sampling
     
   tasks:
-    # === CLEANUP OLD ARCHITECTURE ===
-    - name: Stop old LXC exporter service
+    # === AGGRESSIVE CLEANUP ===
+    - name: Stop ALL LXC-related services
       ansible.builtin.systemd:
-        name: "{{ lxc_old_service_name }}"
+        name: "{{ item }}"
         state: stopped
-      ignore_errors: yes  # Continue even if service doesn't exist
+      ignore_errors: yes
+      loop:
+        - "{{ lxc_old_service_name }}"
+        - "{{ lxc_exporter_service_name }}"
+        - lxc-exporter
+        - lxc-metrics
 
-    - name: Disable old LXC exporter service
+    - name: Disable ALL LXC-related services
       ansible.builtin.systemd:
-        name: "{{ lxc_old_service_name }}"
+        name: "{{ item }}"
         enabled: no
-      ignore_errors: yes  # Continue even if service doesn't exist
+      ignore_errors: yes
+      loop:
+        - "{{ lxc_old_service_name }}"
+        - "{{ lxc_exporter_service_name }}"
+        - lxc-exporter
+        - lxc-metrics
 
-    - name: Remove old systemd service file
-      ansible.builtin.file:
-        path: "/etc/systemd/system/{{ lxc_old_service_name }}"
-        state: absent
-      notify: reload systemd
+    - name: Kill any processes using port 9100
+      ansible.builtin.shell: |
+        # Find and kill processes using port 9100
+        for pid in $(ss -tlnp | grep :9100 | grep -o 'pid=[0-9]*' | cut -d= -f2); do
+          if [ -n "$pid" ]; then
+            echo "Killing process $pid using port 9100"
+            kill -9 $pid 2>/dev/null || true
+          fi
+        done
+        
+        # Also kill by process name patterns
+        pkill -f "lxc.*exporter" || true
+        pkill -f "lxc.*metrics" || true
+        pkill -f ":9100" || true
+      ignore_errors: yes
+      register: port_cleanup
 
-    - name: Stop new LXC exporter service before update (if it exists)
-      ansible.builtin.systemd:
-        name: "{{ lxc_exporter_service_name }}"
+    - name: Wait for port 9100 to be freed
+      ansible.builtin.wait_for:
+        port: 9100
         state: stopped
-      ignore_errors: yes  # Continue even if service doesn't exist or is already stopped
+        timeout: 10
+      ignore_errors: yes
+
+    - name: Remove ALL old systemd service files
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - "{{ lxc_old_service_name }}"
+        - "{{ lxc_exporter_service_name }}"
+        - lxc-exporter.service
+        - lxc-metrics.service
+      notify: reload systemd
 
     - name: Remove old Python app file
       ansible.builtin.file:
         path: "/opt/otelcol-contrib/lxc-exporter-app.py"
         state: absent
 
-    - name: Remove old backup files (older than 7 days)
+    - name: Remove old backup files (older than 1 day)
       ansible.builtin.find:
         paths: "/opt/otelcol-contrib"
         patterns: "*.backup.*"
-        age: "7d"
+        age: "1d"
       register: old_backups
 
     - name: Delete old backup files
@@ -61,23 +94,28 @@
       loop: "{{ old_backups.files }}"
       when: old_backups.files is defined
 
+    - name: Clean up Python cache directories
+      ansible.builtin.file:
+        path: "/opt/otelcol-contrib/__pycache__"
+        state: absent
+
     # === DEPLOY NEW ARCHITECTURE ===
     - name: Copy updated background LXC metrics script
       ansible.builtin.template:
-        src: templates/lxc-metrics-exporter-background.sh.j2  # Updated template name
+        src: templates/lxc-metrics-exporter-background.sh.j2
         dest: "{{ lxc_metrics_script_path }}"
         owner: otelcol
         group: otelcol
-        mode: '0755'            # Make the script executable
+        mode: '0755'
       notify: restart lxc exporter
 
     - name: Copy new Python web server
       ansible.builtin.template:
-        src: templates/lxc-metrics-exporter.py.j2    # Updated template name
+        src: templates/lxc-metrics-exporter.py.j2
         dest: "{{ lxc_webserver_script_path }}"
         owner: otelcol
         group: otelcol
-        mode: '0755'            # Make the script executable
+        mode: '0755'
       notify: restart lxc exporter
 
     - name: Backup old script (if it exists)
@@ -88,21 +126,68 @@
         owner: otelcol
         group: otelcol
         mode: '0644'
-      ignore_errors: yes  # Don't fail if old script doesn't exist
+      ignore_errors: yes
 
     - name: Remove old script
       ansible.builtin.file:
         path: "{{ lxc_old_script_path }}"
         state: absent
-      ignore_errors: yes
 
-    - name: Create or update systemd service file for new architecture
-      ansible.builtin.template:
-        src: templates/lxc-metrics-exporter.service.j2
+    - name: Create NEW systemd service file with corrected configuration
+      ansible.builtin.copy:
         dest: /etc/systemd/system/{{ lxc_exporter_service_name }}
         owner: root
         group: root
         mode: '0644'
+        content: |
+          [Unit]
+          Description=LXC Metrics Exporter with Background Collection
+          Documentation=https://prometheus.io/docs/instrumenting/exporters/
+          After=network.target
+          Wants=network.target
+
+          [Service]
+          Type=simple
+          User=otelcol
+          Group=otelcol
+          ExecStart=/usr/bin/python3 {{ lxc_webserver_script_path }}
+          Restart=always
+          RestartSec=5
+          TimeoutStopSec=20
+
+          # Security settings
+          NoNewPrivileges=yes
+          ProtectSystem=strict
+          ProtectHome=yes
+          ReadWritePaths=/var/lib/otelcol-contrib
+          ReadOnlyPaths=/sys/fs/cgroup /sys/class/net /proc
+          PrivateTmp=yes
+          PrivateDevices=yes
+          ProtectHostname=yes
+          ProtectClock=yes
+          ProtectKernelTunables=yes
+          ProtectKernelModules=yes
+          ProtectKernelLogs=yes
+          RestrictRealtime=yes
+          RestrictSUIDSGID=yes
+          RemoveIPC=yes
+          RestrictNamespaces=yes
+
+          # Resource limits
+          MemoryMax=256M
+          CPUQuota=50%
+
+          # Environment
+          Environment=PYTHONUNBUFFERED=1
+          Environment=FLASK_DEBUG=false
+
+          # Logging
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=lxc-metrics-exporter
+
+          [Install]
+          WantedBy=multi-user.target
       notify: 
         - reload systemd
         - restart lxc exporter
@@ -126,7 +211,7 @@
       ansible.builtin.command:
         cmd: "{{ lxc_metrics_script_path }} --help"
       register: script_test
-      failed_when: script_test.rc > 1  # Allow rc=1 for scripts that don't have --help
+      failed_when: script_test.rc > 1
       ignore_errors: yes
       changed_when: false
 
@@ -137,18 +222,16 @@
       failed_when: python_test.rc != 0
       changed_when: false
 
-    - name: Enable LXC exporter service
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Enable and start LXC exporter service
       ansible.builtin.systemd:
         name: "{{ lxc_exporter_service_name }}"
         enabled: yes
+        state: started
         daemon_reload: yes
-      notify: restart lxc exporter
-
-    # === FINAL CLEANUP ===
-    - name: Clean up Python cache directories
-      ansible.builtin.file:
-        path: "/opt/otelcol-contrib/__pycache__"
-        state: absent
 
   handlers:
     - name: reload systemd
@@ -160,17 +243,14 @@
         name: "{{ lxc_exporter_service_name }}"
         state: restarted
         enabled: yes
-      # Add this condition if you want to avoid restarting during a dry run
-      # when: not ansible_check_mode
 
   post_tasks:
     - name: Wait for service to be ready
       ansible.builtin.wait_for:
         port: 9100
         host: "{{ ansible_default_ipv4.address }}"
-        delay: 2
+        delay: 5
         timeout: 30
-      ignore_errors: yes
 
     - name: Test metrics endpoint
       ansible.builtin.uri:
@@ -178,7 +258,6 @@
         method: GET
         timeout: 10
       register: metrics_test
-      ignore_errors: yes
 
     - name: Test health endpoint  
       ansible.builtin.uri:
@@ -186,29 +265,49 @@
         method: GET
         timeout: 10
       register: health_test
-      ignore_errors: yes
 
-    - name: Display service status
-      ansible.builtin.debug:
-        msg: |
-          LXC Metrics Service Status:
-          - Metrics endpoint: {{ 'OK' if metrics_test.status == 200 else 'FAILED' }}
-          - Health endpoint: {{ 'OK' if health_test.status == 200 else 'FAILED' }}
-          - Service listening on: {{ ansible_default_ipv4.address }}:9100
-          
-          Files cleaned up:
-          - Old service: {{ lxc_old_service_name }}
-          - Old Python app: lxc-exporter-app.py
-          - Python cache: __pycache__
-          - Old backups (>7 days): {{ old_backups.files | length if old_backups.files is defined else 0 }} files
-      when: metrics_test is defined and health_test is defined
-
-    - name: Display remaining files for verification
+    - name: Check service status
       ansible.builtin.command:
-        cmd: ls -la /opt/otelcol-contrib/
-      register: final_file_list
+        cmd: systemctl status {{ lxc_exporter_service_name }}
+      register: service_status
       changed_when: false
 
-    - name: Show final directory contents
+    - name: Display comprehensive status
       ansible.builtin.debug:
-        var: final_file_list.stdout_lines
+        msg: |
+          ===== LXC Metrics Service Deployment Status =====
+          
+          🧹 CLEANUP RESULTS:
+          - Port 9100 cleanup: {{ 'SUCCESS' if port_cleanup.rc == 0 else 'PARTIAL' }}
+          - Old services stopped: ✅
+          - Old files removed: ✅
+          
+          🚀 DEPLOYMENT RESULTS:
+          - Service Status: {{ 'RUNNING' if 'active (running)' in service_status.stdout else 'FAILED' }}
+          - Metrics endpoint: {{ 'OK' if metrics_test.status == 200 else 'FAILED' }}
+          - Health endpoint: {{ 'OK' if health_test.status == 200 else 'FAILED' }}
+          - Service URL: http://{{ ansible_default_ipv4.address }}:9100
+          
+          📋 SERVICE LOG (last 10 lines):
+
+    - name: Show recent service logs
+      ansible.builtin.command:
+        cmd: journalctl -u {{ lxc_exporter_service_name }} -n 10 --no-pager
+      register: service_logs
+      changed_when: false
+
+    - name: Display service logs
+      ansible.builtin.debug:
+        var: service_logs.stdout_lines
+
+    - name: Verify port 9100 is properly bound
+      ansible.builtin.command:
+        cmd: ss -tlnp | grep :9100
+      register: port_check
+      changed_when: false
+
+    - name: Display port status
+      ansible.builtin.debug:
+        msg: |
+          Port 9100 Status:
+          {{ port_check.stdout if port_check.stdout else 'No process listening on port 9100' }}

@@ -1,0 +1,28 @@
+---
+- name: Update LXC Metrics Script and Restart Exporter
+  hosts: debian
+  become: yes # Required to write to /opt and restart services
+
+  vars:
+    # Define the full path to the LXC metrics script
+    lxc_metrics_script_path: "/opt/otelcol-contrib/lxc-metrics-script.sh"
+    # Define the systemd service name for the LXC exporter
+    lxc_exporter_service_name: "lxc-exporter.service" # As defined in your previous playbook
+
+  tasks:
+    - name: Copy updated LXC metrics script
+      ansible.builtin.template:
+        src: templates/lxc-metrics-script.sh.j2 # Source path relative to your playbook or role
+        dest: "{{ lxc_metrics_script_path }}"
+        owner: otelcol          # Ensure correct ownership
+        group: otelcol          # Ensure correct group
+        mode: '0755'            # Make the script executable
+      notify: restart lxc exporter # Trigger handler to restart the service
+
+  handlers:
+    - name: restart lxc exporter
+      ansible.builtin.systemd:
+        name: "{{ lxc_exporter_service_name }}"
+        state: restarted
+      # Add this condition if you want to avoid restarting during a dry run
+      # when: not ansible_check_mode

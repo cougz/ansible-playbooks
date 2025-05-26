@@ -1,0 +1,409 @@
+#!/bin/bash
+# templates/lxc-metrics-exporter-background.sh.j2
+# lxc-metrics-background.sh - Optimized for background execution
+
+# Define the output file for Prometheus metrics
+METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/lxc_metrics.prom"
+TEMP_OUTPUT_FILE="${METRICS_OUTPUT_FILE}.tmp"
+
+# Configurable sampling interval from Ansible
+SAMPLING_INTERVAL_SECONDS={{ bash_sampling_interval | default(2) }}
+
+# Create necessary directories and ensure ownership
+mkdir -p "$(dirname "$METRICS_OUTPUT_FILE")"
+chown otelcol:otelcol "$(dirname "$METRICS_OUTPUT_FILE")" 2>/dev/null || true
+
+# Function to output metric with minimal labels
+output_metric() {
+    local metric_name=$1
+    local metric_type=$2
+    local value=$3
+    local additional_labels=$4
+
+    echo "# TYPE $metric_name $metric_type"
+    echo "${metric_name}{${additional_labels}} $value"
+}
+
+# Function to convert human readable sizes to bytes
+convert_to_bytes() {
+    local size=$1
+    local number=$(echo "$size" | sed 's/[KMGT]$//')
+    local unit=$(echo "$size" | sed 's/[0-9.]*//g')
+
+    case "$unit" in
+        "K") echo "$number * 1024" | bc -l | cut -d. -f1 ;;
+        "M") echo "$number * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        "G") echo "$number * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        "T") echo "$number * 1024 * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        *) echo "$number" | cut -d. -f1 ;;
+    esac
+}
+
+# Function to safely read file with fallback
+safe_read_file() {
+    local file=$1
+    local default=${2:-0}
+
+    if [ -f "$file" ]; then
+        cat "$file" 2>/dev/null || echo "$default"
+    else
+        echo "$default"
+    fi
+}
+
+# Add timestamp for debugging/monitoring
+{
+    echo "# OpenTelemetry metrics for LXC"
+    echo "# Generated at $(date -Iseconds)"
+
+    # === Pre-sampling Data Collection ===
+
+    # CPU Initial Usage
+    CPU_USAGE_USEC_1=$(safe_read_file "/sys/fs/cgroup/cpu.stat" | grep "usage_usec" | awk '{print $2}' || echo "0")
+
+    # Network Initial Usage
+    declare -A NET_RX_BYTES_1 NET_TX_BYTES_1
+    declare -A NET_RX_PACKETS_1 NET_TX_PACKETS_1
+    declare -A NET_RX_ERRORS_1 NET_TX_ERRORS_1
+    declare -A NET_RX_DROPPED_1 NET_TX_DROPPED_1
+
+    # Get eth0 interfaces
+    declare -a NET_INTERFACES_TO_MONITOR
+    declare -A NET_IFACE_LOGICAL_NAME_MAP
+
+    if command -v ip >/dev/null 2>&1; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[0-9]+:\ (eth0@if[0-9]+): ]]; then
+                net_iface_logical_name="${BASH_REMATCH[1]}"
+                net_iface_sysfs_name="eth0"
+                NET_INTERFACES_TO_MONITOR+=("$net_iface_sysfs_name")
+                NET_IFACE_LOGICAL_NAME_MAP["$net_iface_sysfs_name"]="$net_iface_logical_name"
+            fi
+        done < <(ip -o link show 2>/dev/null)
+    fi
+
+    # Store initial network stats
+    for sysfs_name in "${NET_INTERFACES_TO_MONITOR[@]}"; do
+        NET_RX_BYTES_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_bytes")
+        NET_TX_BYTES_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_bytes")
+        NET_RX_PACKETS_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_packets")
+        NET_TX_PACKETS_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_packets")
+        NET_RX_ERRORS_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_errors")
+        NET_TX_ERRORS_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_errors")
+        NET_RX_DROPPED_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_dropped")
+        NET_TX_DROPPED_1[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_dropped")
+    done
+
+    # Disk I/O Initial Usage
+    declare -A DISK_READ_BYTES_1 DISK_WRITE_BYTES_1
+    declare -A DISK_READ_OPS_1 DISK_WRITE_OPS_1
+
+    if [ -f "/sys/fs/cgroup/io.stat" ]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^([0-9]+):([0-9]+)\ (.+)$ ]]; then
+                major="${BASH_REMATCH[1]}"
+                minor="${BASH_REMATCH[2]}"
+                device_key="${major}:${minor}"
+                stats="${BASH_REMATCH[3]}"
+
+                rbytes=$(echo "$stats" | grep -o 'rbytes=[0-9]*' | cut -d= -f2)
+                wbytes=$(echo "$stats" | grep -o 'wbytes=[0-9]*' | cut -d= -f2)
+                rios=$(echo "$stats" | grep -o 'rios=[0-9]*' | cut -d= -f2)
+                wios=$(echo "$stats" | grep -o 'wios=[0-9]*' | cut -d= -f2)
+
+                DISK_READ_BYTES_1[$device_key]=${rbytes:-0}
+                DISK_WRITE_BYTES_1[$device_key]=${wbytes:-0}
+                DISK_READ_OPS_1[$device_key]=${rios:-0}
+                DISK_WRITE_OPS_1[$device_key]=${wios:-0}
+            fi
+        done < "/sys/fs/cgroup/io.stat"
+    fi
+
+    # --- Wait for Sampling Interval ---
+    sleep "$SAMPLING_INTERVAL_SECONDS"
+
+    # === Post-sampling Data Collection ===
+
+    # CPU Final Usage
+    CPU_USAGE_USEC_2=$(safe_read_file "/sys/fs/cgroup/cpu.stat" | grep "usage_usec" | awk '{print $2}' || echo "0")
+
+    # Network Final Usage
+    declare -A NET_RX_BYTES_2 NET_TX_BYTES_2
+    declare -A NET_RX_PACKETS_2 NET_TX_PACKETS_2
+    declare -A NET_RX_ERRORS_2 NET_TX_ERRORS_2
+    declare -A NET_RX_DROPPED_2 NET_TX_DROPPED_2
+
+    for sysfs_name in "${NET_INTERFACES_TO_MONITOR[@]}"; do
+        NET_RX_BYTES_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_bytes")
+        NET_TX_BYTES_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_bytes")
+        NET_RX_PACKETS_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_packets")
+        NET_TX_PACKETS_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_packets")
+        NET_RX_ERRORS_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_errors")
+        NET_TX_ERRORS_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_errors")
+        NET_RX_DROPPED_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/rx_dropped")
+        NET_TX_DROPPED_2[$sysfs_name]=$(safe_read_file "/sys/class/net/$sysfs_name/statistics/tx_dropped")
+    done
+
+    # Disk I/O Final Usage
+    declare -A DISK_READ_BYTES_2 DISK_WRITE_BYTES_2
+    declare -A DISK_READ_OPS_2 DISK_WRITE_OPS_2
+
+    if [ -f "/sys/fs/cgroup/io.stat" ]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^([0-9]+):([0-9]+)\ (.+)$ ]]; then
+                major="${BASH_REMATCH[1]}"
+                minor="${BASH_REMATCH[2]}"
+                device_key="${major}:${minor}"
+                stats="${BASH_REMATCH[3]}"
+
+                rbytes=$(echo "$stats" | grep -o 'rbytes=[0-9]*' | cut -d= -f2)
+                wbytes=$(echo "$stats" | grep -o 'wbytes=[0-9]*' | cut -d= -f2)
+                rios=$(echo "$stats" | grep -o 'rios=[0-9]*' | cut -d= -f2)
+                wios=$(echo "$stats" | grep -o 'wios=[0-9]*' | cut -d= -f2)
+
+                DISK_READ_BYTES_2[$device_key]=${rbytes:-0}
+                DISK_WRITE_BYTES_2[$device_key]=${wbytes:-0}
+                DISK_READ_OPS_2[$device_key]=${rios:-0}
+                DISK_WRITE_OPS_2[$device_key]=${wios:-0}
+            fi
+        done < "/sys/fs/cgroup/io.stat"
+    fi
+
+    # === Static Metrics (don't require sampling) ===
+
+    # Memory Metrics
+    if command -v free >/dev/null 2>&1; then
+        MEMORY_INFO=$(free -b 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            TOTAL_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $2}')
+            USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
+            FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
+            AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
+            CACHED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $6}')
+            BUFFER_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $5}')
+
+            output_metric "lxc_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
+            output_metric "lxc_memory_used_bytes" "gauge" "$USED_MEM" ""
+            output_metric "lxc_memory_free_bytes" "gauge" "$FREE_MEM" ""
+            output_metric "lxc_memory_available_bytes" "gauge" "$AVAILABLE_MEM" ""
+            output_metric "lxc_memory_cached_bytes" "gauge" "$CACHED_MEM" ""
+            output_metric "lxc_memory_buffer_bytes" "gauge" "$BUFFER_MEM" ""
+
+            if [ "$TOTAL_MEM" -gt 0 ]; then
+                MEMORY_UTIL=$(echo "scale=2; $USED_MEM * 100 / $TOTAL_MEM" | bc -l 2>/dev/null || echo "0")
+                output_metric "lxc_memory_utilization_percent" "gauge" "$MEMORY_UTIL" ""
+            fi
+        fi
+    fi
+
+    # Disk Space Metrics
+    if command -v df >/dev/null 2>&1; then
+        df_output=$(df -h / 2>/dev/null | tail -n1)
+        if [ $? -eq 0 ]; then
+            filesystem=$(echo "$df_output" | awk '{print $1}')
+            size_human=$(echo "$df_output" | awk '{print $2}')
+            used_human=$(echo "$df_output" | awk '{print $3}')
+            avail_human=$(echo "$df_output" | awk '{print $4}')
+            use_percent=$(echo "$df_output" | awk '{print $5}' | sed 's/%//')
+            mountpoint=$(echo "$df_output" | awk '{print $6}')
+
+            size_bytes=$(convert_to_bytes "$size_human")
+            used_bytes=$(convert_to_bytes "$used_human")
+            avail_bytes=$(convert_to_bytes "$avail_human")
+
+            output_metric "lxc_disk_total_bytes" "gauge" "$size_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+            output_metric "lxc_disk_used_bytes" "gauge" "$used_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+            output_metric "lxc_disk_available_bytes" "gauge" "$avail_bytes" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+            output_metric "lxc_disk_utilization_percent" "gauge" "$use_percent" "filesystem=\"$filesystem\",mountpoint=\"$mountpoint\""
+        fi
+    fi
+
+    # System Info
+    CPU_COUNT=$(nproc 2>/dev/null || echo "1")
+    output_metric "lxc_cpu_count" "gauge" "$CPU_COUNT" ""
+
+    UPTIME_SECONDS=$(awk '{print $1}' /proc/uptime 2>/dev/null || echo "0")
+    output_metric "lxc_uptime_seconds" "gauge" "$UPTIME_SECONDS" ""
+
+    PROCESS_COUNT=$(ps aux 2>/dev/null | wc -l || echo "0")
+    output_metric "lxc_process_count" "gauge" "$PROCESS_COUNT" ""
+
+    # === Rate Calculations ===
+
+    # CPU Utilization
+    if [ "$CPU_USAGE_USEC_1" -gt 0 ] && [ "$CPU_USAGE_USEC_2" -ge "$CPU_USAGE_USEC_1" ]; then
+        DELTA_CPU_USEC=$((CPU_USAGE_USEC_2 - CPU_USAGE_USEC_1))
+        TOTAL_CPU_TIME_FOR_ONE_CORE=$((SAMPLING_INTERVAL_SECONDS * 1000000))
+
+        if [ "$TOTAL_CPU_TIME_FOR_ONE_CORE" -gt 0 ] && [ "$CPU_COUNT" -gt 0 ]; then
+            CPU_UTIL_CORES_USED=$(echo "scale=4; $DELTA_CPU_USEC / $TOTAL_CPU_TIME_FOR_ONE_CORE" | bc -l 2>/dev/null || echo "0")
+            CPU_UTIL_PERCENT=$(echo "scale=2; ($CPU_UTIL_CORES_USED / $CPU_COUNT) * 100" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_cpu_utilization_percent" "gauge" "$CPU_UTIL_PERCENT" ""
+        else
+            output_metric "lxc_cpu_utilization_percent" "gauge" "0.00" ""
+        fi
+    else
+        output_metric "lxc_cpu_utilization_percent" "gauge" "0.00" ""
+    fi
+
+    # Disk I/O Aggregation and Rates
+    total_read_bytes_1=0
+    total_write_bytes_1=0
+    total_read_ops_1=0
+    total_write_ops_1=0
+    total_read_bytes_2=0
+    total_write_bytes_2=0
+    total_read_ops_2=0
+    total_write_ops_2=0
+
+    # Aggregate values
+    for device_key in "${!DISK_READ_BYTES_1[@]}"; do
+        total_read_bytes_1=$((total_read_bytes_1 + DISK_READ_BYTES_1[$device_key]))
+        total_write_bytes_1=$((total_write_bytes_1 + DISK_WRITE_BYTES_1[$device_key]))
+        total_read_ops_1=$((total_read_ops_1 + DISK_READ_OPS_1[$device_key]))
+        total_write_ops_1=$((total_write_ops_1 + DISK_WRITE_OPS_1[$device_key]))
+    done
+
+    for device_key in "${!DISK_READ_BYTES_2[@]}"; do
+        total_read_bytes_2=$((total_read_bytes_2 + DISK_READ_BYTES_2[$device_key]))
+        total_write_bytes_2=$((total_write_bytes_2 + DISK_WRITE_BYTES_2[$device_key]))
+        total_read_ops_2=$((total_read_ops_2 + DISK_READ_OPS_2[$device_key]))
+        total_write_ops_2=$((total_write_ops_2 + DISK_WRITE_OPS_2[$device_key]))
+    done
+
+    # Output totals
+    output_metric "lxc_disk_read_bytes_total" "counter" "$total_read_bytes_2" ""
+    output_metric "lxc_disk_write_bytes_total" "counter" "$total_write_bytes_2" ""
+    output_metric "lxc_disk_read_ops_total" "counter" "$total_read_ops_2" ""
+    output_metric "lxc_disk_write_ops_total" "counter" "$total_write_ops_2" ""
+
+    # Calculate rates
+    if [ "$total_read_bytes_2" -ge "$total_read_bytes_1" ]; then
+        delta_read_bytes=$((total_read_bytes_2 - total_read_bytes_1))
+        read_bytes_per_sec=$(echo "scale=2; $delta_read_bytes / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+        output_metric "lxc_disk_read_bytes_per_second" "gauge" "$read_bytes_per_sec" ""
+    else
+        output_metric "lxc_disk_read_bytes_per_second" "gauge" "0.00" ""
+    fi
+
+    if [ "$total_write_bytes_2" -ge "$total_write_bytes_1" ]; then
+        delta_write_bytes=$((total_write_bytes_2 - total_write_bytes_1))
+        write_bytes_per_sec=$(echo "scale=2; $delta_write_bytes / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+        output_metric "lxc_disk_write_bytes_per_second" "gauge" "$write_bytes_per_sec" ""
+    else
+        output_metric "lxc_disk_write_bytes_per_second" "gauge" "0.00" ""
+    fi
+
+    if [ "$total_read_ops_2" -ge "$total_read_ops_1" ]; then
+        delta_read_ops=$((total_read_ops_2 - total_read_ops_1))
+        read_iops=$(echo "scale=2; $delta_read_ops / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+        output_metric "lxc_disk_read_iops" "gauge" "$read_iops" ""
+    else
+        output_metric "lxc_disk_read_iops" "gauge" "0.00" ""
+    fi
+
+    if [ "$total_write_ops_2" -ge "$total_write_ops_1" ]; then
+        delta_write_ops=$((total_write_ops_2 - total_write_ops_1))
+        write_iops=$(echo "scale=2; $delta_write_ops / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+        output_metric "lxc_disk_write_iops" "gauge" "$write_iops" ""
+    else
+        output_metric "lxc_disk_write_iops" "gauge" "0.00" ""
+    fi
+
+    # Network Metrics
+    for sysfs_name in "${!NET_RX_BYTES_2[@]}"; do
+        interface="${NET_IFACE_LOGICAL_NAME_MAP[$sysfs_name]:-$sysfs_name}"
+
+        speed=$(safe_read_file "/sys/class/net/$sysfs_name/speed" "unknown")
+        mtu=$(safe_read_file "/sys/class/net/$sysfs_name/mtu" "unknown")
+
+        # Output totals
+        output_metric "lxc_network_rx_bytes_total" "counter" "${NET_RX_BYTES_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_tx_bytes_total" "counter" "${NET_TX_BYTES_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_rx_packets_total" "counter" "${NET_RX_PACKETS_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_tx_packets_total" "counter" "${NET_TX_PACKETS_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_rx_errors_total" "counter" "${NET_RX_ERRORS_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_tx_errors_total" "counter" "${NET_TX_ERRORS_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_rx_dropped_total" "counter" "${NET_RX_DROPPED_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        output_metric "lxc_network_tx_dropped_total" "counter" "${NET_TX_DROPPED_2[$sysfs_name]}" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+
+        # Calculate rates
+        if [ -n "${NET_RX_BYTES_1[$sysfs_name]}" ] && [ "${NET_RX_BYTES_2[$sysfs_name]}" -ge "${NET_RX_BYTES_1[$sysfs_name]}" ]; then
+            delta_rx_bytes=$(( ${NET_RX_BYTES_2[$sysfs_name]} - ${NET_RX_BYTES_1[$sysfs_name]} ))
+            rx_bytes_per_sec=$(echo "scale=2; $delta_rx_bytes / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_rx_bytes_per_second" "gauge" "$rx_bytes_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_rx_bytes_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        if [ -n "${NET_TX_BYTES_1[$sysfs_name]}" ] && [ "${NET_TX_BYTES_2[$sysfs_name]}" -ge "${NET_TX_BYTES_1[$sysfs_name]}" ]; then
+            delta_tx_bytes=$(( ${NET_TX_BYTES_2[$sysfs_name]} - ${NET_TX_BYTES_1[$sysfs_name]} ))
+            tx_bytes_per_sec=$(echo "scale=2; $delta_tx_bytes / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_tx_bytes_per_second" "gauge" "$tx_bytes_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_tx_bytes_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        # Packet rates
+        if [ -n "${NET_RX_PACKETS_1[$sysfs_name]}" ] && [ "${NET_RX_PACKETS_2[$sysfs_name]}" -ge "${NET_RX_PACKETS_1[$sysfs_name]}" ]; then
+            delta_rx_packets=$(( ${NET_RX_PACKETS_2[$sysfs_name]} - ${NET_RX_PACKETS_1[$sysfs_name]} ))
+            rx_packets_per_sec=$(echo "scale=2; $delta_rx_packets / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_rx_packets_per_second" "gauge" "$rx_packets_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_rx_packets_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        if [ -n "${NET_TX_PACKETS_1[$sysfs_name]}" ] && [ "${NET_TX_PACKETS_2[$sysfs_name]}" -ge "${NET_TX_PACKETS_1[$sysfs_name]}" ]; then
+            delta_tx_packets=$(( ${NET_TX_PACKETS_2[$sysfs_name]} - ${NET_TX_PACKETS_1[$sysfs_name]} ))
+            tx_packets_per_sec=$(echo "scale=2; $delta_tx_packets / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_tx_packets_per_second" "gauge" "$tx_packets_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_tx_packets_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        # Error rates
+        if [ -n "${NET_RX_ERRORS_1[$sysfs_name]}" ] && [ "${NET_RX_ERRORS_2[$sysfs_name]}" -ge "${NET_RX_ERRORS_1[$sysfs_name]}" ]; then
+            delta_rx_errors=$(( ${NET_RX_ERRORS_2[$sysfs_name]} - ${NET_RX_ERRORS_1[$sysfs_name]} ))
+            rx_errors_per_sec=$(echo "scale=2; $delta_rx_errors / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_rx_errors_per_second" "gauge" "$rx_errors_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_rx_errors_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        if [ -n "${NET_TX_ERRORS_1[$sysfs_name]}" ] && [ "${NET_TX_ERRORS_2[$sysfs_name]}" -ge "${NET_TX_ERRORS_1[$sysfs_name]}" ]; then
+            delta_tx_errors=$(( ${NET_TX_ERRORS_2[$sysfs_name]} - ${NET_TX_ERRORS_1[$sysfs_name]} ))
+            tx_errors_per_sec=$(echo "scale=2; $delta_tx_errors / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_tx_errors_per_second" "gauge" "$tx_errors_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_tx_errors_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        # Drop rates
+        if [ -n "${NET_RX_DROPPED_1[$sysfs_name]}" ] && [ "${NET_RX_DROPPED_2[$sysfs_name]}" -ge "${NET_RX_DROPPED_1[$sysfs_name]}" ]; then
+            delta_rx_dropped=$(( ${NET_RX_DROPPED_2[$sysfs_name]} - ${NET_RX_DROPPED_1[$sysfs_name]} ))
+            rx_dropped_per_sec=$(echo "scale=2; $delta_rx_dropped / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_rx_dropped_per_second" "gauge" "$rx_dropped_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_rx_dropped_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+
+        if [ -n "${NET_TX_DROPPED_1[$sysfs_name]}" ] && [ "${NET_TX_DROPPED_2[$sysfs_name]}" -ge "${NET_TX_DROPPED_1[$sysfs_name]}" ]; then
+            delta_tx_dropped=$(( ${NET_TX_DROPPED_2[$sysfs_name]} - ${NET_TX_DROPPED_1[$sysfs_name]} ))
+            tx_dropped_per_sec=$(echo "scale=2; $delta_tx_dropped / $SAMPLING_INTERVAL_SECONDS" | bc -l 2>/dev/null || echo "0")
+            output_metric "lxc_network_tx_dropped_per_second" "gauge" "$tx_dropped_per_sec" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        else
+            output_metric "lxc_network_tx_dropped_per_second" "gauge" "0.00" "interface=\"$interface\",speed=\"$speed\",mtu=\"$mtu\""
+        fi
+    done
+
+    echo "# End of metrics"
+
+} > "$TEMP_OUTPUT_FILE"
+
+# Atomically move the temp file to the final location to prevent partial reads
+if [ -f "$TEMP_OUTPUT_FILE" ]; then
+    mv "$TEMP_OUTPUT_FILE" "$METRICS_OUTPUT_FILE"
+    chmod 644 "$METRICS_OUTPUT_FILE"
+    chown otelcol:otelcol "$METRICS_OUTPUT_FILE" 2>/dev/null || true
+fi#!/bin/bash
+# templates/lxc-metrics-exporter-background.sh.

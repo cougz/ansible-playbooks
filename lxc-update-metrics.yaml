@@ -1,28 +1,152 @@
 ---
-- name: Update LXC Metrics Script and Restart Exporter
+- name: Deploy New LXC Metrics Architecture with Background Collection
   hosts: debian
   become: yes # Required to write to /opt and restart services
-
   vars:
-    # Define the full path to the LXC metrics script
-    lxc_metrics_script_path: "/opt/otelcol-contrib/lxc-metrics-script.sh"
+    # Define paths for the new architecture
+    lxc_metrics_script_path: "/opt/otelcol-contrib/lxc-metrics-exporter-background.sh"
+    lxc_webserver_script_path: "/opt/otelcol-contrib/lxc-metrics-exporter.py"
+    lxc_old_script_path: "/opt/otelcol-contrib/lxc-metrics-script.sh"
+    
     # Define the systemd service name for the LXC exporter
-    lxc_exporter_service_name: "lxc-exporter.service" # As defined in your previous playbook
-
+    lxc_exporter_service_name: "lxc-metrics-exporter.service"
+    
+    # Configuration variables
+    metrics_collection_interval: 5  # seconds between metric collections
+    bash_sampling_interval: 2       # seconds for internal bash sampling
+    
   tasks:
-    - name: Copy updated LXC metrics script
+    - name: Stop LXC exporter service before update
+      ansible.builtin.systemd:
+        name: "{{ lxc_exporter_service_name }}"
+        state: stopped
+      ignore_errors: yes  # Continue even if service doesn't exist or is already stopped
+
+    - name: Copy updated background LXC metrics script
       ansible.builtin.template:
-        src: templates/lxc-metrics-script.sh.j2 # Source path relative to your playbook or role
+        src: templates/lxc-metrics-exporter-background.sh.j2  # Updated template name
         dest: "{{ lxc_metrics_script_path }}"
-        owner: otelcol          # Ensure correct ownership
-        group: otelcol          # Ensure correct group
+        owner: otelcol
+        group: otelcol
         mode: '0755'            # Make the script executable
-      notify: restart lxc exporter # Trigger handler to restart the service
+      notify: restart lxc exporter
+
+    - name: Copy new Python web server
+      ansible.builtin.template:
+        src: templates/lxc-metrics-exporter.py.j2    # Updated template name
+        dest: "{{ lxc_webserver_script_path }}"
+        owner: otelcol
+        group: otelcol
+        mode: '0755'            # Make the script executable
+      notify: restart lxc exporter
+
+    - name: Backup old script (if it exists)
+      ansible.builtin.copy:
+        src: "{{ lxc_old_script_path }}"
+        dest: "{{ lxc_old_script_path }}.backup.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+        owner: otelcol
+        group: otelcol
+        mode: '0644'
+      ignore_errors: yes  # Don't fail if old script doesn't exist
+
+    - name: Remove old script
+      ansible.builtin.file:
+        path: "{{ lxc_old_script_path }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Create or update systemd service file for new architecture
+      ansible.builtin.template:
+        src: templates/lxc-metrics-exporter.service.j2
+        dest: /etc/systemd/system/{{ lxc_exporter_service_name }}
+        owner: root
+        group: root
+        mode: '0644'
+      notify: 
+        - reload systemd
+        - restart lxc exporter
+
+    - name: Ensure metrics output directory exists with correct permissions
+      ansible.builtin.file:
+        path: /var/lib/otelcol-contrib
+        state: directory
+        owner: otelcol
+        group: otelcol
+        mode: '0755'
+
+    - name: Ensure Python Flask dependencies are installed
+      ansible.builtin.package:
+        name: 
+          - python3-flask
+          - python3-pip
+        state: present
+
+    - name: Test that the background script is executable and valid
+      ansible.builtin.command:
+        cmd: "{{ lxc_metrics_script_path }} --help"
+      register: script_test
+      failed_when: script_test.rc > 1  # Allow rc=1 for scripts that don't have --help
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Test that the Python script is valid
+      ansible.builtin.command:
+        cmd: python3 -m py_compile {{ lxc_webserver_script_path }}
+      register: python_test
+      failed_when: python_test.rc != 0
+      changed_when: false
+
+    - name: Enable LXC exporter service
+      ansible.builtin.systemd:
+        name: "{{ lxc_exporter_service_name }}"
+        enabled: yes
+        daemon_reload: yes
+      notify: restart lxc exporter
 
   handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
     - name: restart lxc exporter
       ansible.builtin.systemd:
         name: "{{ lxc_exporter_service_name }}"
         state: restarted
+        enabled: yes
       # Add this condition if you want to avoid restarting during a dry run
       # when: not ansible_check_mode
+
+  post_tasks:
+    - name: Wait for service to be ready
+      ansible.builtin.wait_for:
+        port: 9100
+        host: "{{ ansible_default_ipv4.address }}"
+        delay: 2
+        timeout: 30
+      ignore_errors: yes
+
+    - name: Test metrics endpoint
+      ansible.builtin.uri:
+        url: "http://{{ ansible_default_ipv4.address }}:9100/metrics"
+        method: GET
+        timeout: 10
+      register: metrics_test
+      ignore_errors: yes
+
+    - name: Test health endpoint  
+      ansible.builtin.uri:
+        url: "http://{{ ansible_default_ipv4.address }}:9100/health"
+        method: GET
+        timeout: 10
+      register: health_test
+      ignore_errors: yes
+
+    - name: Display service status
+      ansible.builtin.debug:
+        msg: |
+          LXC Metrics Service Status:
+          - Metrics endpoint: {{ 'OK' if metrics_test.status == 200 else 'FAILED' }}
+          - Health endpoint: {{ 'OK' if health_test.status == 200 else 'FAILED' }}
+          - Service listening on: {{ ansible_default_ipv4.address }}:9100
+      when: metrics_test is defined and health_test is defined

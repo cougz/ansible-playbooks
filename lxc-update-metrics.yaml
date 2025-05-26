@@ -8,20 +8,60 @@
     lxc_webserver_script_path: "/opt/otelcol-contrib/lxc-metrics-exporter.py"
     lxc_old_script_path: "/opt/otelcol-contrib/lxc-metrics-script.sh"
     
-    # Define the systemd service name for the LXC exporter
+    # Define the systemd service names
     lxc_exporter_service_name: "lxc-metrics-exporter.service"
+    lxc_old_service_name: "lxc-exporter.service"  # Old service name
     
     # Configuration variables
     metrics_collection_interval: 5  # seconds between metric collections
     bash_sampling_interval: 2       # seconds for internal bash sampling
     
   tasks:
-    - name: Stop LXC exporter service before update
+    # === CLEANUP OLD ARCHITECTURE ===
+    - name: Stop old LXC exporter service
+      ansible.builtin.systemd:
+        name: "{{ lxc_old_service_name }}"
+        state: stopped
+      ignore_errors: yes  # Continue even if service doesn't exist
+
+    - name: Disable old LXC exporter service
+      ansible.builtin.systemd:
+        name: "{{ lxc_old_service_name }}"
+        enabled: no
+      ignore_errors: yes  # Continue even if service doesn't exist
+
+    - name: Remove old systemd service file
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ lxc_old_service_name }}"
+        state: absent
+      notify: reload systemd
+
+    - name: Stop new LXC exporter service before update (if it exists)
       ansible.builtin.systemd:
         name: "{{ lxc_exporter_service_name }}"
         state: stopped
       ignore_errors: yes  # Continue even if service doesn't exist or is already stopped
 
+    - name: Remove old Python app file
+      ansible.builtin.file:
+        path: "/opt/otelcol-contrib/lxc-exporter-app.py"
+        state: absent
+
+    - name: Remove old backup files (older than 7 days)
+      ansible.builtin.find:
+        paths: "/opt/otelcol-contrib"
+        patterns: "*.backup.*"
+        age: "7d"
+      register: old_backups
+
+    - name: Delete old backup files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+      when: old_backups.files is defined
+
+    # === DEPLOY NEW ARCHITECTURE ===
     - name: Copy updated background LXC metrics script
       ansible.builtin.template:
         src: templates/lxc-metrics-exporter-background.sh.j2  # Updated template name
@@ -104,6 +144,12 @@
         daemon_reload: yes
       notify: restart lxc exporter
 
+    # === FINAL CLEANUP ===
+    - name: Clean up Python cache directories
+      ansible.builtin.file:
+        path: "/opt/otelcol-contrib/__pycache__"
+        state: absent
+
   handlers:
     - name: reload systemd
       ansible.builtin.systemd:
@@ -149,4 +195,20 @@
           - Metrics endpoint: {{ 'OK' if metrics_test.status == 200 else 'FAILED' }}
           - Health endpoint: {{ 'OK' if health_test.status == 200 else 'FAILED' }}
           - Service listening on: {{ ansible_default_ipv4.address }}:9100
+          
+          Files cleaned up:
+          - Old service: {{ lxc_old_service_name }}
+          - Old Python app: lxc-exporter-app.py
+          - Python cache: __pycache__
+          - Old backups (>7 days): {{ old_backups.files | length if old_backups.files is defined else 0 }} files
       when: metrics_test is defined and health_test is defined
+
+    - name: Display remaining files for verification
+      ansible.builtin.command:
+        cmd: ls -la /opt/otelcol-contrib/
+      register: final_file_list
+      changed_when: false
+
+    - name: Show final directory contents
+      ansible.builtin.debug:
+        var: final_file_list.stdout_lines

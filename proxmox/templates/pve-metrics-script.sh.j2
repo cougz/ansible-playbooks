@@ -1,6 +1,6 @@
 #!/bin/bash
 # pve-metrics-script.sh.j2 - Proxmox-specific metrics collection
-# This script collects metrics specific to Proxmox hosts including ZFS pools
+# This script collects metrics specific to Proxmox hosts including ZFS pools, SMART data, and temperatures
 
 # Define the output file for Prometheus metrics
 METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/pve_metrics.prom"
@@ -32,9 +32,167 @@ convert_to_bytes() {
     esac
 }
 
+# Function to extract temperature value from sensors output
+extract_temp() {
+    echo "$1" | grep -oE '\+[0-9]+\.[0-9]+°C' | head -1 | sed 's/+\([0-9.]*\)°C/\1/'
+}
+
 {
     echo "# Proxmox VE metrics"
     echo "# Generated at $(date -Iseconds)"
+
+    # === NVMe SMART Metrics ===
+    if command -v smartctl >/dev/null 2>&1; then
+        # Check for NVMe devices directly
+        for nvme_device in /dev/nvme[0-9]; do
+            if [ -e "$nvme_device" ]; then
+                device_name=$(basename "$nvme_device")
+
+                # Get SMART data
+                smart_output=$(smartctl -a "$nvme_device" 2>/dev/null)
+
+                if [ $? -eq 0 ]; then
+                    # Extract basic device info
+                    model=$(echo "$smart_output" | grep "Model Number:" | sed 's/Model Number:[[:space:]]*//')
+                    serial=$(echo "$smart_output" | grep "Serial Number:" | sed 's/Serial Number:[[:space:]]*//')
+                    firmware=$(echo "$smart_output" | grep "Firmware Version:" | sed 's/Firmware Version:[[:space:]]*//')
+
+                    # Health status (1 for PASSED, 0 for FAILED)
+                    health_status=$(echo "$smart_output" | grep "SMART overall-health" | grep -o "PASSED\|FAILED")
+                    health_value=0
+                    if [ "$health_status" = "PASSED" ]; then
+                        health_value=1
+                    fi
+
+                    # Extract SMART values
+                    temperature=$(echo "$smart_output" | grep "^Temperature:" | awk '{print $2}')
+                    available_spare=$(echo "$smart_output" | grep "Available Spare:" | awk '{print $3}' | sed 's/%//')
+                    available_spare_threshold=$(echo "$smart_output" | grep "Available Spare Threshold:" | awk '{print $4}' | sed 's/%//')
+                    percentage_used=$(echo "$smart_output" | grep "Percentage Used:" | awk '{print $3}' | sed 's/%//')
+                    power_cycles=$(echo "$smart_output" | grep "Power Cycles:" | awk '{print $3}')
+                    power_on_hours=$(echo "$smart_output" | grep "Power On Hours:" | awk '{print $4}')
+                    unsafe_shutdowns=$(echo "$smart_output" | grep "Unsafe Shutdowns:" | awk '{print $3}')
+                    media_errors=$(echo "$smart_output" | grep "Media and Data Integrity Errors:" | awk '{print $6}')
+                    error_log_entries=$(echo "$smart_output" | grep "Error Information Log Entries:" | awk '{print $5}')
+
+                    # Data units (convert to bytes)
+                    data_units_read=$(echo "$smart_output" | grep "Data Units Read:" | awk '{print $4}' | sed 's/,//')
+                    data_units_written=$(echo "$smart_output" | grep "Data Units Written:" | awk '{print $4}' | sed 's/,//')
+
+                    # Extract TB values and convert to bytes
+                    if echo "$smart_output" | grep "Data Units Read:" | grep -q "TB"; then
+                        tb_read=$(echo "$smart_output" | grep "Data Units Read:" | grep -oE '\[[0-9.]+[[:space:]]*TB\]' | sed 's/\[\([0-9.]*\)[[:space:]]*TB\]/\1/')
+                        if [ -n "$tb_read" ]; then
+                            data_read_bytes=$(echo "$tb_read * 1000000000000" | bc -l | cut -d. -f1)
+                        else
+                            data_read_bytes=0
+                        fi
+                    else
+                        data_read_bytes=0
+                    fi
+
+                    if echo "$smart_output" | grep "Data Units Written:" | grep -q "TB"; then
+                        tb_written=$(echo "$smart_output" | grep "Data Units Written:" | grep -oE '\[[0-9.]+[[:space:]]*TB\]' | sed 's/\[\([0-9.]*\)[[:space:]]*TB\]/\1/')
+                        if [ -n "$tb_written" ]; then
+                            data_written_bytes=$(echo "$tb_written * 1000000000000" | bc -l | cut -d. -f1)
+                        else
+                            data_written_bytes=0
+                        fi
+                    else
+                        data_written_bytes=0
+                    fi
+
+                    # Temperature sensors
+                    temp_sensor_1=$(echo "$smart_output" | grep "Temperature Sensor 1:" | awk '{print $4}')
+                    temp_sensor_2=$(echo "$smart_output" | grep "Temperature Sensor 2:" | awk '{print $4}')
+
+                    # Output metrics with device labels
+                    labels="device=\"$device_name\",model=\"$model\",serial=\"$serial\",firmware=\"$firmware\""
+
+                    output_metric "pve_nvme_health_status" "gauge" "$health_value" "$labels"
+
+                    # Temperature metrics
+                    if [ -n "$temperature" ]; then
+                        output_metric "pve_nvme_temperature_celsius" "gauge" "$temperature" "$labels"
+                    fi
+                    if [ -n "$temp_sensor_1" ]; then
+                        output_metric "pve_nvme_temperature_sensor1_celsius" "gauge" "$temp_sensor_1" "$labels"
+                    fi
+                    if [ -n "$temp_sensor_2" ]; then
+                        output_metric "pve_nvme_temperature_sensor2_celsius" "gauge" "$temp_sensor_2" "$labels"
+                    fi
+
+                    # Wear and reliability metrics
+                    if [ -n "$available_spare" ]; then
+                        output_metric "pve_nvme_available_spare_percent" "gauge" "$available_spare" "$labels"
+                    fi
+                    if [ -n "$available_spare_threshold" ]; then
+                        output_metric "pve_nvme_available_spare_threshold_percent" "gauge" "$available_spare_threshold" "$labels"
+                    fi
+                    if [ -n "$percentage_used" ]; then
+                        output_metric "pve_nvme_percentage_used" "gauge" "$percentage_used" "$labels"
+                    fi
+
+                    # Usage metrics
+                    if [ -n "$power_cycles" ]; then
+                        output_metric "pve_nvme_power_cycles_total" "counter" "$power_cycles" "$labels"
+                    fi
+                    if [ -n "$power_on_hours" ]; then
+                        output_metric "pve_nvme_power_on_hours_total" "counter" "$power_on_hours" "$labels"
+                    fi
+                    if [ -n "$unsafe_shutdowns" ]; then
+                        output_metric "pve_nvme_unsafe_shutdowns_total" "counter" "$unsafe_shutdowns" "$labels"
+                    fi
+
+                    # Error metrics
+                    if [ -n "$media_errors" ]; then
+                        output_metric "pve_nvme_media_errors_total" "counter" "$media_errors" "$labels"
+                    fi
+                    if [ -n "$error_log_entries" ]; then
+                        output_metric "pve_nvme_error_log_entries_total" "counter" "$error_log_entries" "$labels"
+                    fi
+
+                    # Data transfer metrics
+                    if [ -n "$data_units_read" ]; then
+                        output_metric "pve_nvme_data_units_read_total" "counter" "$data_units_read" "$labels"
+                    fi
+                    if [ -n "$data_units_written" ]; then
+                        output_metric "pve_nvme_data_units_written_total" "counter" "$data_units_written" "$labels"
+                    fi
+                    if [ -n "$data_read_bytes" ] && [ "$data_read_bytes" -gt 0 ]; then
+                        output_metric "pve_nvme_data_read_bytes_total" "counter" "$data_read_bytes" "$labels"
+                    fi
+                    if [ -n "$data_written_bytes" ] && [ "$data_written_bytes" -gt 0 ]; then
+                        output_metric "pve_nvme_data_written_bytes_total" "counter" "$data_written_bytes" "$labels"
+                    fi
+                fi
+            fi
+        done
+    fi
+
+    # === CPU Temperature Metrics ===
+    if command -v sensors >/dev/null 2>&1; then
+        sensors_output=$(sensors 2>/dev/null)
+
+        # CPU Core temperatures only
+        echo "$sensors_output" | grep "^Core [0-9]" | while read -r line; do
+            core_num=$(echo "$line" | grep -oE "Core [0-9]+" | grep -oE "[0-9]+")
+            temp_value=$(extract_temp "$line")
+
+            if [ -n "$temp_value" ]; then
+                output_metric "pve_cpu_core_temperature_celsius" "gauge" "$temp_value" "core=\"$core_num\""
+            fi
+        done
+
+        # Package temperature
+        package_temp=$(echo "$sensors_output" | grep "Package id 0:" | head -1)
+        if [ -n "$package_temp" ]; then
+            temp_value=$(extract_temp "$package_temp")
+            if [ -n "$temp_value" ]; then
+                output_metric "pve_cpu_package_temperature_celsius" "gauge" "$temp_value" ""
+            fi
+        fi
+    fi
 
     # === ZFS Pool Metrics ===
     if command -v zpool >/dev/null 2>&1; then
@@ -44,7 +202,7 @@ convert_to_bytes() {
             if [[ "$line" =~ ^NAME ]]; then
                 continue
             fi
-            
+
             # Parse zpool list output
             if [[ "$line" =~ ^([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+) ]]; then
                 pool_name="${BASH_REMATCH[1]}"
@@ -55,17 +213,17 @@ convert_to_bytes() {
                 cap="${BASH_REMATCH[8]}"
                 dedup="${BASH_REMATCH[9]}"
                 health="${BASH_REMATCH[10]}"
-                
+
                 # Convert human readable to bytes
                 size_bytes=$(convert_to_bytes "$size_human")
                 alloc_bytes=$(convert_to_bytes "$alloc_human")
                 free_bytes=$(convert_to_bytes "$free_human")
-                
+
                 # Remove % from percentages
                 frag_percent=$(echo "$frag" | sed 's/%//')
                 cap_percent=$(echo "$cap" | sed 's/%//')
                 dedup_ratio=$(echo "$dedup" | sed 's/x//')
-                
+
                 # Output ZFS metrics
                 output_metric "pve_zfs_pool_size_bytes" "gauge" "$size_bytes" "pool=\"$pool_name\""
                 output_metric "pve_zfs_pool_allocated_bytes" "gauge" "$alloc_bytes" "pool=\"$pool_name\""
@@ -73,7 +231,7 @@ convert_to_bytes() {
                 output_metric "pve_zfs_pool_fragmentation_percent" "gauge" "$frag_percent" "pool=\"$pool_name\""
                 output_metric "pve_zfs_pool_capacity_percent" "gauge" "$cap_percent" "pool=\"$pool_name\""
                 output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "pool=\"$pool_name\""
-                
+
                 # Health status as a labeled metric (1 for healthy, 0 for degraded)
                 health_value=0
                 if [ "$health" = "ONLINE" ]; then
@@ -82,22 +240,22 @@ convert_to_bytes() {
                 output_metric "pve_zfs_pool_health" "gauge" "$health_value" "pool=\"$pool_name\",status=\"$health\""
             fi
         done < <(zpool list 2>/dev/null)
-        
+
         # Get ZFS dataset metrics
         while IFS=$'\t' read -r name used avail refer mountpoint; do
             # Skip header
             if [[ "$name" == "NAME" ]]; then
                 continue
             fi
-            
+
             # Convert sizes
             used_bytes=$(convert_to_bytes "$used")
             avail_bytes=$(convert_to_bytes "$avail")
             refer_bytes=$(convert_to_bytes "$refer")
-            
+
             # Clean dataset name for label
             dataset_label=$(echo "$name" | sed 's/[^a-zA-Z0-9_-]/_/g')
-            
+
             output_metric "pve_zfs_dataset_used_bytes" "gauge" "$used_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
             output_metric "pve_zfs_dataset_available_bytes" "gauge" "$avail_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
             output_metric "pve_zfs_dataset_referenced_bytes" "gauge" "$refer_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
@@ -112,17 +270,17 @@ convert_to_bytes() {
             if [[ "$vmid" == "VMID" ]]; then
                 continue
             fi
-            
+
             # VM status (1 for running, 0 for stopped)
             status_value=0
             if [ "$status" = "running" ]; then
                 status_value=1
             fi
-            
+
             output_metric "pve_vm_status" "gauge" "$status_value" "vmid=\"$vmid\",name=\"$name\",status=\"$status\""
         done < <(qm list 2>/dev/null | tail -n +2)
     fi
-    
+
     if command -v pct >/dev/null 2>&1; then
         # Get LXC status
         while IFS=' ' read -r ctid status name; do
@@ -130,13 +288,13 @@ convert_to_bytes() {
             if [[ "$ctid" == "VMID" ]]; then
                 continue
             fi
-            
+
             # LXC status (1 for running, 0 for stopped)
             status_value=0
             if [ "$status" = "running" ]; then
                 status_value=1
             fi
-            
+
             output_metric "pve_lxc_status" "gauge" "$status_value" "ctid=\"$ctid\",name=\"$name\",status=\"$status\""
         done < <(pct list 2>/dev/null | tail -n +2)
     fi
@@ -146,17 +304,17 @@ convert_to_bytes() {
         # Check if node is in a cluster
         if pvecm status >/dev/null 2>&1; then
             cluster_status=$(pvecm status 2>/dev/null)
-            
+
             # Extract cluster info
             quorum=$(echo "$cluster_status" | grep "Quorum information" -A 5 | grep "Quorate:" | awk '{print $2}')
             nodes_total=$(echo "$cluster_status" | grep "Total nodes:" | awk '{print $3}')
             nodes_online=$(echo "$cluster_status" | grep "Expected votes:" | awk '{print $3}')
-            
+
             quorum_value=0
             if [ "$quorum" = "Yes" ]; then
                 quorum_value=1
             fi
-            
+
             output_metric "pve_cluster_quorum" "gauge" "$quorum_value" ""
             output_metric "pve_cluster_nodes_total" "gauge" "${nodes_total:-1}" ""
             output_metric "pve_cluster_nodes_online" "gauge" "${nodes_online:-1}" ""
@@ -176,23 +334,23 @@ convert_to_bytes() {
             if [[ "$storage" == "Name" ]] || [[ -z "$storage" ]]; then
                 continue
             fi
-            
+
             # Only process if we have valid data
             if [[ -n "$total" ]] && [[ "$total" != "0" ]]; then
                 # Convert to bytes (pvesm shows in KB)
                 total_bytes=$((total * 1024))
                 used_bytes=$((used * 1024))
                 avail_bytes=$((avail * 1024))
-                
+
                 # Extract percentage (remove %)
                 usage_percent=$(echo "$percent" | sed 's/%//')
-                
+
                 # Active status (1 or 0)
                 active_value=0
                 if [ "$active" = "active" ]; then
                     active_value=1
                 fi
-                
+
                 output_metric "pve_storage_total_bytes" "gauge" "$total_bytes" "storage=\"$storage\",type=\"$type\""
                 output_metric "pve_storage_used_bytes" "gauge" "$used_bytes" "storage=\"$storage\",type=\"$type\""
                 output_metric "pve_storage_available_bytes" "gauge" "$avail_bytes" "storage=\"$storage\",type=\"$type\""
@@ -211,7 +369,7 @@ convert_to_bytes() {
 
     # Standard system metrics (CPU, Memory, etc.)
     # These are similar to LXC but run at host level
-    
+
     # Memory metrics
     if command -v free >/dev/null 2>&1; then
         MEMORY_INFO=$(free -b 2>/dev/null)
@@ -220,7 +378,7 @@ convert_to_bytes() {
             USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
             FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
             AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
-            
+
             output_metric "pve_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
             output_metric "pve_memory_used_bytes" "gauge" "$USED_MEM" ""
             output_metric "pve_memory_free_bytes" "gauge" "$FREE_MEM" ""
@@ -231,13 +389,13 @@ convert_to_bytes() {
     # CPU metrics
     CPU_COUNT=$(nproc 2>/dev/null || echo "1")
     output_metric "pve_cpu_count" "gauge" "$CPU_COUNT" ""
-    
+
     # Load average
     if [ -f /proc/loadavg ]; then
         load_1min=$(awk '{print $1}' /proc/loadavg)
         load_5min=$(awk '{print $2}' /proc/loadavg)
         load_15min=$(awk '{print $3}' /proc/loadavg)
-        
+
         output_metric "pve_load_average_1m" "gauge" "$load_1min" ""
         output_metric "pve_load_average_5m" "gauge" "$load_5min" ""
         output_metric "pve_load_average_15m" "gauge" "$load_15min" ""
@@ -250,7 +408,7 @@ convert_to_bytes() {
             tx_bytes=$(cat "/sys/class/net/$interface/statistics/tx_bytes")
             rx_packets=$(cat "/sys/class/net/$interface/statistics/rx_packets")
             tx_packets=$(cat "/sys/class/net/$interface/statistics/tx_packets")
-            
+
             output_metric "pve_network_rx_bytes_total" "counter" "$rx_bytes" "interface=\"$interface\""
             output_metric "pve_network_tx_bytes_total" "counter" "$tx_bytes" "interface=\"$interface\""
             output_metric "pve_network_rx_packets_total" "counter" "$rx_packets" "interface=\"$interface\""

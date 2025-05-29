@@ -108,7 +108,7 @@
 
     - name: Copy Proxmox metrics script
       template:
-        src: pve/templates/pve-metrics-script.sh.j2
+        src: "../templates/pve-metrics-script.sh.j2"
         dest: "{{ pve_metrics_script_path }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
@@ -116,7 +116,7 @@
 
     - name: Copy Proxmox metrics Flask exporter app
       template:
-        src: pve/templates/pve-metrics-exporter.py.j2
+        src: "../templates/pve-metrics-exporter.py.j2"
         dest: "{{ pve_exporter_app_path }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
@@ -124,7 +124,7 @@
 
     - name: Create Proxmox metrics exporter systemd service
       template:
-        src: pve/templates/pve-metrics.service.j2
+        src: "../templates/pve-metrics.service.j2"
         dest: "/etc/systemd/system/{{ pve_exporter_service_name }}"
         owner: root
         group: root
@@ -133,7 +133,7 @@
 
     - name: Create OpenTelemetry Collector configuration
       template:
-        src: pve/templates/pve-otel-config.yaml.j2
+        src: "../templates/pve-otel-config.yaml.j2"
         dest: "{{ otel_config_dir }}/config.yaml"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
@@ -142,7 +142,7 @@
 
     - name: Create OpenTelemetry systemd service
       template:
-        src: pve/templates/pve-otelcol-contrib.service.j2
+        src: "../templates/pve-otelcol-contrib.service.j2"
         dest: /etc/systemd/system/otelcol-contrib.service
         mode: '0644'
       notify:

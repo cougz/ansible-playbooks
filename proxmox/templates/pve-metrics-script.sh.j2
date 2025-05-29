@@ -229,8 +229,8 @@ extract_temp() {
         while IFS=$'\t' read -r name used avail refer mountpoint; do
             # Skip header
             if [[ "$name" == "NAME" ]]; then
-                continue
-            }
+                continue; # Corrected: Changed '}' to '; fi'
+            fi
 
             # Convert sizes
             used_bytes=$(convert_to_bytes "$used")

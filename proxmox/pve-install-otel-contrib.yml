@@ -1,0 +1,229 @@
+---
+- name: Install OpenTelemetry Collector Contrib on Proxmox Hosts
+  hosts: proxmox
+  gather_facts: yes
+  become: yes
+
+  vars:
+    otel_version: 0.126.0
+    otel_user: otelcol
+    otel_group: otelcol
+    otel_home: /opt/otelcol-contrib
+    otel_config_dir: /etc/otelcol-contrib
+    otel_log_dir: /var/log/otelcol-contrib
+    otel_data_dir: /var/lib/otelcol-contrib
+    
+    # Proxmox-specific metrics components
+    pve_metrics_script_filename: "pve-metrics-script.sh"
+    pve_exporter_app_filename: "pve-metrics-exporter.py"
+    pve_exporter_service_filename: "pve-metrics-exporter.service"
+
+    pve_metrics_script_path: "{{ otel_home }}/{{ pve_metrics_script_filename }}"
+    pve_exporter_app_path: "{{ otel_home }}/{{ pve_exporter_app_filename }}"
+    pve_exporter_service_name: "{{ pve_exporter_service_filename }}"
+
+    pve_metrics_scrape_interval: "30s"
+    metrics_collection_interval: 30  # seconds
+
+  tasks:
+    - name: Validate mandatory survey variables
+      block:
+        - name: Check if otel_endpoint is provided
+          fail:
+            msg: "OTEL endpoint must be provided via Survey variable 'otel_endpoint'"
+          when: otel_endpoint is not defined or otel_endpoint == ''
+          run_once: true
+
+    - name: Display installation info
+      debug:
+        msg: |
+          ===============================================
+          OpenTelemetry Collector Installation for Proxmox
+          ===============================================
+          Target Host: {{ inventory_hostname }}
+          Target Endpoint: {{ otel_endpoint }}
+          OTel Version: {{ otel_version }}
+          ===============================================
+
+    - name: Create OpenTelemetry group
+      group:
+        name: "{{ otel_group }}"
+        system: yes
+
+    - name: Create OpenTelemetry user
+      user:
+        name: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        system: yes
+        shell: /bin/false
+        home: "{{ otel_home }}"
+        create_home: no
+
+    - name: Create OpenTelemetry directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+      loop:
+        - "{{ otel_home }}"
+        - "{{ otel_config_dir }}"
+        - "{{ otel_log_dir }}"
+        - "{{ otel_data_dir }}"
+
+    - name: Download OpenTelemetry Collector Contrib
+      get_url:
+        url: "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol-contrib_{{ otel_version }}_linux_amd64.tar.gz"
+        dest: /tmp/otelcol-contrib.tar.gz
+        mode: '0644'
+        timeout: 120
+
+    - name: Extract OpenTelemetry Collector Contrib
+      unarchive:
+        src: /tmp/otelcol-contrib.tar.gz
+        dest: "{{ otel_home }}"
+        remote_src: yes
+        creates: "{{ otel_home }}/otelcol-contrib"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+
+    - name: Set executable permissions on otelcol-contrib binary
+      file:
+        path: "{{ otel_home }}/otelcol-contrib"
+        mode: '0755'
+
+    - name: Install required packages
+      apt:
+        name:
+          - python3-full
+          - python3-pip
+          - python3-flask
+          - procps
+          - sysstat
+          - bc
+          - iproute2
+        state: present
+        update_cache: yes
+
+    - name: Copy Proxmox metrics script
+      template:
+        src: pve/templates/pve-metrics-script.sh.j2
+        dest: "{{ pve_metrics_script_path }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0755'
+
+    - name: Copy Proxmox metrics Flask exporter app
+      template:
+        src: pve/templates/pve-metrics-exporter.py.j2
+        dest: "{{ pve_exporter_app_path }}"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0755'
+
+    - name: Create Proxmox metrics exporter systemd service
+      template:
+        src: pve/templates/pve-metrics.service.j2
+        dest: "/etc/systemd/system/{{ pve_exporter_service_name }}"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Create OpenTelemetry Collector configuration
+      template:
+        src: pve/templates/pve-otel-config.yaml.j2
+        dest: "{{ otel_config_dir }}/config.yaml"
+        owner: "{{ otel_user }}"
+        group: "{{ otel_group }}"
+        mode: '0644'
+      notify: restart otelcol
+
+    - name: Create OpenTelemetry systemd service
+      template:
+        src: pve/templates/pve-otelcol-contrib.service.j2
+        dest: /etc/systemd/system/otelcol-contrib.service
+        mode: '0644'
+      notify:
+        - reload systemd
+        - restart otelcol
+
+    - name: Clean up downloaded archive
+      file:
+        path: /tmp/otelcol-contrib.tar.gz
+        state: absent
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Proxmox metrics exporter service
+      systemd:
+        name: "{{ pve_exporter_service_name }}"
+        state: started
+        enabled: yes
+
+    - name: Wait for metrics exporter to start
+      wait_for:
+        port: 9100
+        host: 127.0.0.1
+        timeout: 30
+
+    - name: Verify metrics exporter endpoint
+      uri:
+        url: http://localhost:9100/metrics
+        method: GET
+        status_code: 200
+      register: metrics_check
+      retries: 3
+      delay: 5
+
+    - name: Start and enable OpenTelemetry Collector service
+      systemd:
+        name: otelcol-contrib
+        state: started
+        enabled: yes
+
+    - name: Wait for OpenTelemetry service to start
+      pause:
+        seconds: 10
+
+    - name: Verify collector is responding
+      uri:
+        url: "http://localhost:8888/metrics"
+        method: GET
+        timeout: 15
+      register: otel_health_check
+      retries: 3
+      delay: 5
+
+    - name: Display installation results
+      debug:
+        msg: |
+          === INSTALLATION COMPLETE ===
+          Host: {{ inventory_hostname }}
+          OpenTelemetry Collector: {{ 'Running' if otel_health_check.status == 200 else 'Not responding' }}
+          Metrics Exporter: {{ 'Running' if metrics_check.status == 200 else 'Not responding' }}
+          
+          Services:
+          - OpenTelemetry Collector: systemctl status otelcol-contrib
+          - Metrics Exporter: systemctl status {{ pve_exporter_service_name }}
+          
+          Endpoints:
+          - Collector Internal Metrics: http://localhost:8888/metrics
+          - Proxmox Metrics: http://localhost:9100/metrics
+          
+          Configuration:
+          - Config: {{ otel_config_dir }}/config.yaml
+          - Logs: journalctl -u otelcol-contrib -f
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart otelcol
+      systemd:
+        name: otelcol-contrib
+        state: restarted

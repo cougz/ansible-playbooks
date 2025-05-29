@@ -19,7 +19,8 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths={{ otel_data_dir }}
-ReadOnlyPaths=/sys /proc /etc/pve
+# Added /dev to ReadOnlyPaths to allow smartctl to access device information
+ReadOnlyPaths=/sys /proc /etc/pve /dev
 PrivateTmp=yes
 ProtectHostname=yes
 ProtectClock=yes
@@ -36,7 +37,8 @@ CPUQuota=25%
 
 # Environment
 Environment=PYTHONUNBUFFERED=1
-Environment=FLASK_ENV=production
+Environment=FLASK_DEBUG=0 # Updated for Flask 2.3+
+# Environment=FLASK_ENV=production # Old, deprecated setting
 
 # Logging
 StandardOutput=journal

@@ -1,0 +1,173 @@
+receivers:
+  # Receiver for Proxmox-specific metrics
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'proxmox-metrics'
+          scrape_interval: {{ pve_metrics_scrape_interval | default('30s') }}
+          static_configs:
+            - targets: ['localhost:9100']
+          metrics_path: /metrics
+
+  # Host metrics for general system monitoring
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+          system.cpu.time:
+            enabled: true
+      disk:
+        metrics:
+          system.disk.io:
+            enabled: true
+          system.disk.operations:
+            enabled: true
+          system.disk.io_time:
+            enabled: true
+          system.disk.pending_operations:
+            enabled: true
+      filesystem:
+        metrics:
+          system.filesystem.usage:
+            enabled: true
+          system.filesystem.utilization:
+            enabled: true
+      load:
+        metrics:
+          system.cpu.load_average.1m:
+            enabled: true
+          system.cpu.load_average.5m:
+            enabled: true
+          system.cpu.load_average.15m:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.usage:
+            enabled: true
+          system.memory.utilization:
+            enabled: true
+      network:
+        metrics:
+          system.network.io:
+            enabled: true
+          system.network.packets:
+            enabled: true
+          system.network.errors:
+            enabled: true
+          system.network.dropped:
+            enabled: true
+          system.network.connections:
+            enabled: true
+      paging:
+        metrics:
+          system.paging.usage:
+            enabled: true
+          system.paging.operations:
+            enabled: true
+      processes:
+        metrics:
+          system.processes.count:
+            enabled: true
+          system.processes.created:
+            enabled: true
+
+  # OTLP receiver for applications
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  # Memory limiter
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+
+  # Resource attributes for Proxmox host identification
+  resource:
+    attributes:
+      - key: service.name
+        value: "proxmox-ve"
+        action: upsert
+      - key: service.instance.id
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: host.name
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: host.type
+        value: "proxmox"
+        action: upsert
+      - key: os.type
+        value: "linux"
+        action: upsert
+      # Proxmox specific attributes
+      - key: proxmox.cluster.name
+        value: "{{ proxmox_cluster_name | default('standalone') }}"
+        action: upsert
+      - key: proxmox.node.name
+        value: "{{ inventory_hostname }}"
+        action: upsert
+      - key: deployment.environment
+        value: "production"
+        action: upsert
+
+  # Transform processor to ensure consistent metric names
+  transform/metrics:
+    error_mode: ignore
+    trace_statements:
+      - context: metric
+        statements:
+          # Ensure Proxmox metrics have consistent naming
+          - set(name, "proxmox." + name) where IsMatch(name, "^pve_")
+
+  # Batch processor
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # OTLP exporter to your monitoring stack
+  otlp:
+    endpoint: "{{ otel_endpoint }}"
+    tls:
+      insecure: true
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug exporter (remove in production)
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 20
+
+extensions:
+  # Health check
+  health_check:
+    endpoint: "127.0.0.1:13133"
+  
+  # Performance profiler
+  pprof:
+    endpoint: "127.0.0.1:1777"
+
+service:
+  extensions: [health_check, pprof]
+  
+  pipelines:
+    metrics/system:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otl

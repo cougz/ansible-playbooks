@@ -92,7 +92,7 @@
         src: /tmp/otelcol-contrib.tar.gz
         dest: "{{ otel_home }}"
         remote_src: yes
-        creates: "{{ otel_home }}/otelcol-contrib"
+        # Removed 'creates' to ensure it always extracts and replaces if source archive exists
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
 

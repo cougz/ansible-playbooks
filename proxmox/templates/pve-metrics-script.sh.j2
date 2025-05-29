@@ -1,0 +1,269 @@
+#!/bin/bash
+# pve-metrics-script.sh.j2 - Proxmox-specific metrics collection
+# This script collects metrics specific to Proxmox hosts including ZFS pools
+
+# Define the output file for Prometheus metrics
+METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/pve_metrics.prom"
+TEMP_OUTPUT_FILE="${METRICS_OUTPUT_FILE}.tmp"
+
+# Function to output metric with labels
+output_metric() {
+    local metric_name=$1
+    local metric_type=$2
+    local value=$3
+    local additional_labels=$4
+
+    echo "# TYPE $metric_name $metric_type"
+    echo "${metric_name}{${additional_labels}} $value"
+}
+
+# Function to convert human readable sizes to bytes
+convert_to_bytes() {
+    local size=$1
+    local number=$(echo "$size" | sed 's/[KMGT]$//')
+    local unit=$(echo "$size" | sed 's/[0-9.]*//g')
+
+    case "$unit" in
+        "K") echo "$number * 1024" | bc -l | cut -d. -f1 ;;
+        "M") echo "$number * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        "G") echo "$number * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        "T") echo "$number * 1024 * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
+        *) echo "$number" | cut -d. -f1 ;;
+    esac
+}
+
+{
+    echo "# Proxmox VE metrics"
+    echo "# Generated at $(date -Iseconds)"
+
+    # === ZFS Pool Metrics ===
+    if command -v zpool >/dev/null 2>&1; then
+        # Get ZFS pool list output
+        while IFS= read -r line; do
+            # Skip header line
+            if [[ "$line" =~ ^NAME ]]; then
+                continue
+            fi
+            
+            # Parse zpool list output
+            if [[ "$line" =~ ^([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+) ]]; then
+                pool_name="${BASH_REMATCH[1]}"
+                size_human="${BASH_REMATCH[2]}"
+                alloc_human="${BASH_REMATCH[3]}"
+                free_human="${BASH_REMATCH[4]}"
+                frag="${BASH_REMATCH[7]}"
+                cap="${BASH_REMATCH[8]}"
+                dedup="${BASH_REMATCH[9]}"
+                health="${BASH_REMATCH[10]}"
+                
+                # Convert human readable to bytes
+                size_bytes=$(convert_to_bytes "$size_human")
+                alloc_bytes=$(convert_to_bytes "$alloc_human")
+                free_bytes=$(convert_to_bytes "$free_human")
+                
+                # Remove % from percentages
+                frag_percent=$(echo "$frag" | sed 's/%//')
+                cap_percent=$(echo "$cap" | sed 's/%//')
+                dedup_ratio=$(echo "$dedup" | sed 's/x//')
+                
+                # Output ZFS metrics
+                output_metric "pve_zfs_pool_size_bytes" "gauge" "$size_bytes" "pool=\"$pool_name\""
+                output_metric "pve_zfs_pool_allocated_bytes" "gauge" "$alloc_bytes" "pool=\"$pool_name\""
+                output_metric "pve_zfs_pool_free_bytes" "gauge" "$free_bytes" "pool=\"$pool_name\""
+                output_metric "pve_zfs_pool_fragmentation_percent" "gauge" "$frag_percent" "pool=\"$pool_name\""
+                output_metric "pve_zfs_pool_capacity_percent" "gauge" "$cap_percent" "pool=\"$pool_name\""
+                output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "pool=\"$pool_name\""
+                
+                # Health status as a labeled metric (1 for healthy, 0 for degraded)
+                health_value=0
+                if [ "$health" = "ONLINE" ]; then
+                    health_value=1
+                fi
+                output_metric "pve_zfs_pool_health" "gauge" "$health_value" "pool=\"$pool_name\",status=\"$health\""
+            fi
+        done < <(zpool list 2>/dev/null)
+        
+        # Get ZFS dataset metrics
+        while IFS=$'\t' read -r name used avail refer mountpoint; do
+            # Skip header
+            if [[ "$name" == "NAME" ]]; then
+                continue
+            fi
+            
+            # Convert sizes
+            used_bytes=$(convert_to_bytes "$used")
+            avail_bytes=$(convert_to_bytes "$avail")
+            refer_bytes=$(convert_to_bytes "$refer")
+            
+            # Clean dataset name for label
+            dataset_label=$(echo "$name" | sed 's/[^a-zA-Z0-9_-]/_/g')
+            
+            output_metric "pve_zfs_dataset_used_bytes" "gauge" "$used_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
+            output_metric "pve_zfs_dataset_available_bytes" "gauge" "$avail_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
+            output_metric "pve_zfs_dataset_referenced_bytes" "gauge" "$refer_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
+        done < <(zfs list -H -o name,used,avail,refer,mountpoint 2>/dev/null)
+    fi
+
+    # === Proxmox VM/LXC Status ===
+    if command -v qm >/dev/null 2>&1; then
+        # Get VM status
+        while IFS=' ' read -r vmid status name; do
+            # Skip header
+            if [[ "$vmid" == "VMID" ]]; then
+                continue
+            fi
+            
+            # VM status (1 for running, 0 for stopped)
+            status_value=0
+            if [ "$status" = "running" ]; then
+                status_value=1
+            fi
+            
+            output_metric "pve_vm_status" "gauge" "$status_value" "vmid=\"$vmid\",name=\"$name\",status=\"$status\""
+        done < <(qm list 2>/dev/null | tail -n +2)
+    fi
+    
+    if command -v pct >/dev/null 2>&1; then
+        # Get LXC status
+        while IFS=' ' read -r ctid status name; do
+            # Skip header
+            if [[ "$ctid" == "VMID" ]]; then
+                continue
+            fi
+            
+            # LXC status (1 for running, 0 for stopped)
+            status_value=0
+            if [ "$status" = "running" ]; then
+                status_value=1
+            fi
+            
+            output_metric "pve_lxc_status" "gauge" "$status_value" "ctid=\"$ctid\",name=\"$name\",status=\"$status\""
+        done < <(pct list 2>/dev/null | tail -n +2)
+    fi
+
+    # === Proxmox Cluster Status ===
+    if command -v pvecm >/dev/null 2>&1; then
+        # Check if node is in a cluster
+        if pvecm status >/dev/null 2>&1; then
+            cluster_status=$(pvecm status 2>/dev/null)
+            
+            # Extract cluster info
+            quorum=$(echo "$cluster_status" | grep "Quorum information" -A 5 | grep "Quorate:" | awk '{print $2}')
+            nodes_total=$(echo "$cluster_status" | grep "Total nodes:" | awk '{print $3}')
+            nodes_online=$(echo "$cluster_status" | grep "Expected votes:" | awk '{print $3}')
+            
+            quorum_value=0
+            if [ "$quorum" = "Yes" ]; then
+                quorum_value=1
+            fi
+            
+            output_metric "pve_cluster_quorum" "gauge" "$quorum_value" ""
+            output_metric "pve_cluster_nodes_total" "gauge" "${nodes_total:-1}" ""
+            output_metric "pve_cluster_nodes_online" "gauge" "${nodes_online:-1}" ""
+        else
+            # Single node setup
+            output_metric "pve_cluster_quorum" "gauge" "1" ""
+            output_metric "pve_cluster_nodes_total" "gauge" "1" ""
+            output_metric "pve_cluster_nodes_online" "gauge" "1" ""
+        fi
+    fi
+
+    # === Storage Status ===
+    # Parse Proxmox storage status
+    if command -v pvesm >/dev/null 2>&1; then
+        while IFS=' ' read -r storage type active total used avail percent; do
+            # Skip header and empty lines
+            if [[ "$storage" == "Name" ]] || [[ -z "$storage" ]]; then
+                continue
+            fi
+            
+            # Only process if we have valid data
+            if [[ -n "$total" ]] && [[ "$total" != "0" ]]; then
+                # Convert to bytes (pvesm shows in KB)
+                total_bytes=$((total * 1024))
+                used_bytes=$((used * 1024))
+                avail_bytes=$((avail * 1024))
+                
+                # Extract percentage (remove %)
+                usage_percent=$(echo "$percent" | sed 's/%//')
+                
+                # Active status (1 or 0)
+                active_value=0
+                if [ "$active" = "active" ]; then
+                    active_value=1
+                fi
+                
+                output_metric "pve_storage_total_bytes" "gauge" "$total_bytes" "storage=\"$storage\",type=\"$type\""
+                output_metric "pve_storage_used_bytes" "gauge" "$used_bytes" "storage=\"$storage\",type=\"$type\""
+                output_metric "pve_storage_available_bytes" "gauge" "$avail_bytes" "storage=\"$storage\",type=\"$type\""
+                output_metric "pve_storage_usage_percent" "gauge" "$usage_percent" "storage=\"$storage\",type=\"$type\""
+                output_metric "pve_storage_active" "gauge" "$active_value" "storage=\"$storage\",type=\"$type\""
+            fi
+        done < <(pvesm status 2>/dev/null | tail -n +2)
+    fi
+
+    # === System Information ===
+    # Proxmox version
+    if [ -f /etc/pve/.version ]; then
+        pve_version=$(cat /etc/pve/.version)
+        output_metric "pve_version_info" "gauge" "1" "version=\"$pve_version\""
+    fi
+
+    # Standard system metrics (CPU, Memory, etc.)
+    # These are similar to LXC but run at host level
+    
+    # Memory metrics
+    if command -v free >/dev/null 2>&1; then
+        MEMORY_INFO=$(free -b 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            TOTAL_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $2}')
+            USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
+            FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
+            AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
+            
+            output_metric "pve_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
+            output_metric "pve_memory_used_bytes" "gauge" "$USED_MEM" ""
+            output_metric "pve_memory_free_bytes" "gauge" "$FREE_MEM" ""
+            output_metric "pve_memory_available_bytes" "gauge" "$AVAILABLE_MEM" ""
+        fi
+    fi
+
+    # CPU metrics
+    CPU_COUNT=$(nproc 2>/dev/null || echo "1")
+    output_metric "pve_cpu_count" "gauge" "$CPU_COUNT" ""
+    
+    # Load average
+    if [ -f /proc/loadavg ]; then
+        load_1min=$(awk '{print $1}' /proc/loadavg)
+        load_5min=$(awk '{print $2}' /proc/loadavg)
+        load_15min=$(awk '{print $3}' /proc/loadavg)
+        
+        output_metric "pve_load_average_1m" "gauge" "$load_1min" ""
+        output_metric "pve_load_average_5m" "gauge" "$load_5min" ""
+        output_metric "pve_load_average_15m" "gauge" "$load_15min" ""
+    fi
+
+    # Network interface metrics for physical interfaces
+    for interface in $(ls /sys/class/net/ | grep -E '^(en|eth|bond)'); do
+        if [ -f "/sys/class/net/$interface/statistics/rx_bytes" ]; then
+            rx_bytes=$(cat "/sys/class/net/$interface/statistics/rx_bytes")
+            tx_bytes=$(cat "/sys/class/net/$interface/statistics/tx_bytes")
+            rx_packets=$(cat "/sys/class/net/$interface/statistics/rx_packets")
+            tx_packets=$(cat "/sys/class/net/$interface/statistics/tx_packets")
+            
+            output_metric "pve_network_rx_bytes_total" "counter" "$rx_bytes" "interface=\"$interface\""
+            output_metric "pve_network_tx_bytes_total" "counter" "$tx_bytes" "interface=\"$interface\""
+            output_metric "pve_network_rx_packets_total" "counter" "$rx_packets" "interface=\"$interface\""
+            output_metric "pve_network_tx_packets_total" "counter" "$tx_packets" "interface=\"$interface\""
+        fi
+    done
+
+    echo "# End of metrics"
+
+} > "$TEMP_OUTPUT_FILE"
+
+# Atomically move the temp file to prevent partial reads
+if [ -f "$TEMP_OUTPUT_FILE" ]; then
+    mv "$TEMP_OUTPUT_FILE" "$METRICS_OUTPUT_FILE"
+    chmod 644 "$METRICS_OUTPUT_FILE"
+fi

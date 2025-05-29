@@ -53,6 +53,7 @@
       user:
         name: "{{ otel_user }}"
         group: "{{ otel_group }}"
+        groups: disk # ADDED: Add otelcol user to the 'disk' group for NVMe access
         system: yes
         shell: /bin/false
         home: "{{ otel_home }}"
@@ -106,7 +107,6 @@
         state: present
         update_cache: yes
 
-    # UPDATED TASK FOR NVME PERMISSIONS - INDENTATION FIXED HERE
     - name: Create udev rule for NVMe device permissions
       copy:
         content: |
@@ -122,11 +122,11 @@
 
     - name: Reload udev rules to apply new permissions
       command: udevadm control --reload-rules
-      changed_when: true # Always report as changed to ensure trigger runs
+      changed_when: true
 
     - name: Trigger udev to re-evaluate devices
       command: udevadm trigger
-      changed_when: true # Always report as changed to ensure permissions are applied
+      changed_when: true
 
     - name: Copy Proxmox metrics script
       template:
@@ -252,4 +252,4 @@
 
     - name: reload udev
       command: udevadm control --reload-rules
-      changed_when: true # Always report as changed for handler
+      changed_when: true

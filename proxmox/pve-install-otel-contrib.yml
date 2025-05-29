@@ -140,7 +140,7 @@
     - name: Copy Proxmox metrics Flask exporter app
       template:
         src: "../templates/pve-metrics-exporter.py.j2"
-        dest: "{{ pve_exporter_app_path }}"
+        dest: "{{ pvel_exporter_app_path }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
         mode: '0755'

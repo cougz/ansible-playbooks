@@ -170,4 +170,28 @@ service:
     metrics/system:
       receivers: [hostmetrics]
       processors: [memory_limiter, resource, batch]
-      exporters: [otl
+      exporters: [otlp, debug]
+    
+    metrics/proxmox:
+      receivers: [prometheus]
+      processors: [memory_limiter, resource, transform/metrics, batch]
+      exporters: [otlp, debug]
+    
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]
+    
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp]
+  
+  telemetry:
+    logs:
+      level: info
+      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
+      error_output_paths: ["{{ otel_log_dir }}/otelcol-error.log"]
+    metrics:
+      level: basic
+      address: "127.0.0.1:8888"

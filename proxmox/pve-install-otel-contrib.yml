@@ -102,16 +102,18 @@
           - sysstat
           - bc
           - iproute2
-          - smartmontools # Added smartmontools
+          - smartmontools
         state: present
         update_cache: yes
 
-    # NEW TASKS FOR NVME PERMISSIONS
+    # UPDATED TASK FOR NVME PERMISSIONS - INDENTATION FIXED HERE
     - name: Create udev rule for NVMe device permissions
       copy:
         content: |
           # Grant read/write access to NVMe character devices for the '{{ otel_group }}' group
           SUBSYSTEM=="nvme", KERNEL=="nvme[0-9]*", MODE="0660", GROUP="{{ otel_group }}"
+          # Grant read/write access to NVMe block devices (namespaces) for the '{{ otel_group }}' group
+          SUBSYSTEM=="block", KERNEL=="nvme[0-9]*n[0-9]*", MODE="0660", GROUP="{{ otel_group }}"
         dest: "/etc/udev/rules.d/99-nvme-{{ otel_group }}.rules"
         owner: root
         group: root

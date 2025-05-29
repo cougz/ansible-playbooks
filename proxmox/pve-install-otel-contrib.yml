@@ -53,11 +53,19 @@
       user:
         name: "{{ otel_user }}"
         group: "{{ otel_group }}"
-        groups: disk # ADDED: Add otelcol user to the 'disk' group for NVMe access
+        groups: disk
         system: yes
         shell: /bin/false
         home: "{{ otel_home }}"
         create_home: no
+
+    - name: Configure sudoers for otelcol to run smartctl on NVMe devices
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/otelcol_smartctl_nvme
+        create: yes
+        mode: '0440'
+        line: '{{ otel_user }} ALL=(root) NOPASSWD: /usr/sbin/smartctl -a /dev/nvme[0-9]*'
+        validate: 'visudo -cf %s'
 
     - name: Create OpenTelemetry directories
       file:

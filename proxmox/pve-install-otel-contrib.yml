@@ -107,25 +107,16 @@
         state: present
         update_cache: yes
 
+    - name: Check current capabilities of /usr/sbin/nvme
+      command: getcap /usr/sbin/nvme
+      register: nvme_getcap_result
+      changed_when: false
+      ignore_errors: true # In case getcap fails or nvme is not found initially
+
     - name: Apply setcap to /usr/sbin/nvme for otelcol user
       command: setcap 'cap_sys_admin+ep' /usr/sbin/nvme
-      args:
-        # Check for existing capabilities to make this task idempotent
-        creates: "{{ '/usr/sbin/nvme cap_sys_admin=ep' in ansible_facts.cmdline }}" 
-        # This will always show as changed if setcap is reapplied, 
-        # but the actual change logic is to prevent unneeded re-application if already set.
-        # Alternatively, a 'stat' module could check for capabilities, but it's more complex.
-      changed_when: false # Set to false to avoid reporting change on every run if getcap is not used to check beforehand.
-      # You might want to use a 'stat' module to check capabilities and then run 'setcap' conditionally for true idempotency.
-      # For simplicity and given the example, this command will run every time if no 'creates' check is used.
-      # To make it truly idempotent based on actual capabilities, you would need:
-      # - name: Check nvme capabilities
-      #   command: getcap /usr/sbin/nvme
-      #   register: nvme_getcap_result
-      #   changed_when: false
-      # - name: Apply setcap to /usr/sbin/nvme for otelcol user
-      #   command: setcap 'cap_sys_admin+ep' /usr/sbin/nvme
-      #   when: "'cap_sys_admin=ep' not in nvme_getcap_result.stdout"
+      when: "'cap_sys_admin=ep' not in nvme_getcap_result.stdout | default('')"
+      # This task will only run if the required capability is NOT already set.
 
     # Removed the udev rule and reload/trigger tasks as setcap on the binary is used instead.
 
@@ -140,7 +131,7 @@
     - name: Copy Proxmox metrics Flask exporter app
       template:
         src: "../templates/pve-metrics-exporter.py.j2"
-        dest: "{{ pvel_exporter_app_path }}"
+        dest: "{{ pve_exporter_app_path }}" # Corrected variable name here
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
         mode: '0755'
@@ -227,3 +218,13 @@
           OpenTelemetry Collector and Proxmox metrics exporter installed and running.
           Metrics exporter URL: http://{{ inventory_hostname }}:9100/metrics
           OpenTelemetry Collector metrics URL: http://{{ inventory_hostname }}:8888/metrics
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: restart otelcol
+      systemd:
+        name: otelcol-contrib
+        state: restarted

@@ -1,3 +1,4 @@
+---
 - name: Install OpenTelemetry Collector Contrib on Proxmox Hosts
   hosts: proxmox
   gather_facts: yes
@@ -13,7 +14,8 @@
     otel_data_dir: /var/lib/otelcol-contrib
     
     # Proxmox-specific metrics components
-    pve_metrics_script_filename: "pve-metrics-script.sh"
+    # Keeping script_filename here, though the Python app will handle metric generation
+    pve_metrics_script_filename: "pve-metrics-script.sh" # This is now just a placeholder filename
     pve_exporter_app_filename: "pve-metrics-exporter.py"
     pve_exporter_service_filename: "pve-metrics-exporter.service"
 
@@ -102,43 +104,45 @@
           - sysstat
           - bc
           - iproute2
-          - nvme-cli # Added nvme-cli
+          - nvme-cli
           - libcap2-bin # Added libcap2-bin for setcap
+          - lm-sensors # Ensure lm-sensors is installed for 'sensors' command
         state: present
         update_cache: yes
 
     - name: Check current capabilities of /usr/sbin/nvme
-      command: getcap /usr/sbin/nvme
+      ansible.builtin.command: getcap /usr/sbin/nvme
       register: nvme_getcap_result
       changed_when: false
       ignore_errors: true # In case getcap fails or nvme is not found initially
 
-    - name: Apply setcap to /usr/sbin/nvme for otelcol user
-      command: setcap 'cap_sys_admin+ep' /usr/sbin/nvme
+    - name: Apply setcap to /usr/sbin/nvme for cap_sys_admin+ep
+      ansible.builtin.command: setcap 'cap_sys_admin+ep' /usr/sbin/nvme
       when: "'cap_sys_admin=ep' not in nvme_getcap_result.stdout | default('')"
       # This task will only run if the required capability is NOT already set.
-
-    # Removed the udev rule and reload/trigger tasks as setcap on the binary is used instead.
+      # You might also want to apply this to `sensors` binary if it's external,
+      # but usually `lm-sensors` handles permissions differently or via kernel modules.
+      # For now, focusing on nvme as it was the primary hurdle.
 
     - name: Copy Proxmox metrics script
-      template:
-        src: "../templates/pve-metrics-script.sh.j2"
+      ansible.builtin.template:
+        src: "templates/pve-metrics-script.sh.j2"
         dest: "{{ pve_metrics_script_path }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
         mode: '0755'
 
     - name: Copy Proxmox metrics Flask exporter app
-      template:
-        src: "../templates/pve-metrics-exporter.py.j2"
-        dest: "{{ pve_exporter_app_path }}" # Corrected variable name here
+      ansible.builtin.template:
+        src: "templates/pve-metrics-exporter.py.j2"
+        dest: "{{ pve_exporter_app_path }}"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
         mode: '0755'
 
     - name: Create Proxmox metrics exporter systemd service
-      template:
-        src: "../templates/pve-metrics.service.j2"
+      ansible.builtin.template:
+        src: "templates/pve-metrics.service.j2"
         dest: "/etc/systemd/system/{{ pve_exporter_service_name }}"
         owner: root
         group: root
@@ -146,8 +150,8 @@
       notify: reload systemd
 
     - name: Create OpenTelemetry Collector configuration
-      template:
-        src: "../templates/pve-otel-config.yaml.j2"
+      ansible.builtin.template:
+        src: "templates/pve-otel-config.yaml.j2"
         dest: "{{ otel_config_dir }}/config.yaml"
         owner: "{{ otel_user }}"
         group: "{{ otel_group }}"
@@ -155,8 +159,8 @@
       notify: restart otelcol
 
     - name: Create OpenTelemetry systemd service
-      template:
-        src: "../templates/pve-otelcol-contrib.service.j2"
+      ansible.builtin.template:
+        src: "templates/pve-otelcol-contrib.service.j2"
         dest: /etc/systemd/system/otelcol-contrib.service
         mode: '0644'
       notify:
@@ -164,28 +168,28 @@
         - restart otelcol
 
     - name: Clean up downloaded archive
-      file:
+      ansible.builtin.file:
         path: /tmp/otelcol-contrib.tar.gz
         state: absent
 
     - name: Reload systemd daemon
-      systemd:
+      ansible.builtin.systemd:
         daemon_reload: yes
 
     - name: Start and enable Proxmox metrics exporter service
-      systemd:
+      ansible.builtin.systemd:
         name: "{{ pve_exporter_service_name }}"
         state: started
         enabled: yes
 
     - name: Wait for metrics exporter to start
-      wait_for:
+      ansible.builtin.wait_for:
         port: 9100
         host: 127.0.0.1
         timeout: 30
 
     - name: Verify metrics exporter endpoint
-      uri:
+      ansible.builtin.uri:
         url: http://localhost:9100/metrics
         method: GET
         status_code: 200
@@ -194,17 +198,17 @@
       delay: 5
 
     - name: Start and enable OpenTelemetry Collector service
-      systemd:
+      ansible.builtin.systemd:
         name: otelcol-contrib
         state: started
         enabled: yes
 
     - name: Wait for OpenTelemetry service to start
-      pause:
+      ansible.builtin.pause:
         seconds: 10
 
     - name: Verify collector is responding
-      uri:
+      ansible.builtin.uri:
         url: "http://localhost:8888/metrics"
         method: GET
         timeout: 15
@@ -221,10 +225,10 @@
 
   handlers:
     - name: reload systemd
-      systemd:
+      ansible.builtin.systemd:
         daemon_reload: yes
 
     - name: restart otelcol
-      systemd:
+      ansible.builtin.systemd:
         name: otelcol-contrib
         state: restarted

@@ -1,6 +1,6 @@
 #!/bin/bash
 # pve-metrics-script.sh.j2 - Proxmox-specific metrics collection
-# This script collects metrics specific to Proxmox hosts including ZFS pools, SMART data, and temperatures
+# This script collects metrics specific to Proxmox hosts including ZFS pools, NVMe SMART data, and temperatures
 
 # Define the output file for Prometheus metrics
 METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/pve_metrics.prom"
@@ -42,69 +42,53 @@ extract_temp() {
     echo "# Generated at $(date -Iseconds)"
 
     # === NVMe SMART Metrics ===
-    if command -v smartctl >/dev/null 2>&1; then
+    if command -v nvme >/dev/null 2>&1; then
         # Check for NVMe devices directly
         for nvme_device in /dev/nvme[0-9]; do
             if [ -e "$nvme_device" ]; then
                 device_name=$(basename "$nvme_device")
 
-                # Get SMART data
-                smart_output=$(sudo /usr/sbin/smartctl -a "$nvme_device" 2>/dev/null)
+                # Get SMART data using nvme-cli
+                # Note: No sudo needed here due to setcap
+                smart_output=$(/usr/sbin/nvme smart-log "$nvme_device" 2>/dev/null)
 
                 if [ $? -eq 0 ]; then
-                    # Extract basic device info
-                    model=$(echo "$smart_output" | grep "Model Number:" | sed 's/Model Number:[[:space:]]*//')
-                    serial=$(echo "$smart_output" | grep "Serial Number:" | sed 's/Serial Number:[[:space:]]*//')
-                    firmware=$(echo "$smart_output" | grep "Firmware Version:" | sed 's/Firmware Version:[[:space:]]*//')
+                    # Extract basic device info (nvme-cli doesn't directly provide model/serial in smart-log, you might need 'identify' for that)
+                    # For simplicity, we'll try to get it from 'nvme identify' if smart-log doesn't have it.
+                    identify_output=$(/usr/sbin/nvme identify "$nvme_device" 2>/dev/null)
+                    model=$(echo "$identify_output" | grep "Model Number:" | awk -F':' '{print $2}' | xargs)
+                    serial=$(echo "$identify_output" | grep "Serial Number:" | awk -F':' '{print $2}' | xargs)
+                    firmware=$(echo "$identify_output" | grep "Firmware Version:" | awk -F':' '{print $2}' | xargs)
 
-                    # Health status (1 for PASSED, 0 for FAILED)
-                    health_status=$(echo "$smart_output" | grep "SMART overall-health" | grep -o "PASSED\|FAILED")
-                    health_value=0
-                    if [ "$health_status" = "PASSED" ]; then
-                        health_value=1
+                    # Health status (critical_warning: 0 for healthy, >0 for warning/critical)
+                    critical_warning=$(echo "$smart_output" | grep "critical_warning" | awk '{print $3}')
+                    health_value=1 # Assume healthy
+                    if [ "$critical_warning" -ne 0 ]; then
+                        health_value=0 # Not healthy
                     fi
 
-                    # Extract SMART values
-                    temperature=$(echo "$smart_output" | grep "^Temperature:" | awk '{print $2}')
-                    available_spare=$(echo "$smart_output" | grep "Available Spare:" | awk '{print $3}' | sed 's/%//')
-                    available_spare_threshold=$(echo "$smart_output" | grep "Available Spare Threshold:" | awk '{print $4}' | sed 's/%//')
-                    percentage_used=$(echo "$smart_output" | grep "Percentage Used:" | awk '{print $3}' | sed 's/%//')
-                    power_cycles=$(echo "$smart_output" | grep "Power Cycles:" | awk '{print $3}')
-                    power_on_hours=$(echo "$smart_output" | grep "Power On Hours:" | awk '{print $4}')
-                    unsafe_shutdowns=$(echo "$smart_output" | grep "Unsafe Shutdowns:" | awk '{print $3}')
-                    media_errors=$(echo "$smart_output" | grep "Media and Data Integrity Errors:" | awk '{print $6}')
-                    error_log_entries=$(echo "$smart_output" | grep "Error Information Log Entries:" | awk '{print $5}')
+                    # Extract SMART values from nvme smart-log output
+                    temperature=$(echo "$smart_output" | grep "temperature" | awk '{print $3}' | sed 's/°C.*//')
+                    available_spare=$(echo "$smart_output" | grep "available_spare" | awk '{print $3}' | sed 's/%//')
+                    available_spare_threshold=$(echo "$smart_output" | grep "available_spare_threshold" | awk '{print $3}' | sed 's/%//')
+                    percentage_used=$(echo "$smart_output" | grep "percentage_used" | awk '{print $3}' | sed 's/%//')
+                    power_cycles=$(echo "$smart_output" | grep "power_cycles" | awk '{print $3}')
+                    power_on_hours=$(echo "$smart_output" | grep "power_on_hours" | awk '{print $3}')
+                    unsafe_shutdowns=$(echo "$smart_output" | grep "unsafe_shutdowns" | awk '{print $3}')
+                    media_errors=$(echo "$smart_output" | grep "media_errors" | awk '{print $3}')
+                    error_log_entries=$(echo "$smart_output" | grep "num_err_log_entries" | awk '{print $3}')
 
-                    # Data units (convert to bytes)
-                    data_units_read=$(echo "$smart_output" | grep "Data Units Read:" | awk '{print $4}' | sed 's/,//')
-                    data_units_written=$(echo "$smart_output" | grep "Data Units Written:" | awk '{print $4}' | sed 's/,//')
+                    # Data units (nvme smart-log provides these directly as decimal values)
+                    data_units_read=$(echo "$smart_output" | grep "Data Units Read" | awk '{print $4}' | sed 's/,//g')
+                    data_units_written=$(echo "$smart_output" | grep "Data Units Written" | awk '{print $4}' | sed 's/,//g')
 
-                    # Extract TB values and convert to bytes
-                    if echo "$smart_output" | grep "Data Units Read:" | grep -q "TB"; then
-                        tb_read=$(echo "$smart_output" | grep "Data Units Read:" | grep -oE '\[[0-9.]+[[:space:]]*TB\]' | sed 's/\[\([0-9.]*\)[[:space:]]*TB\]/\1/')
-                        if [ -n "$tb_read" ]; then
-                            data_read_bytes=$(echo "$tb_read * 1000000000000" | bc -l | cut -d. -f1)
-                        else
-                            data_read_bytes=0
-                        fi
-                    else
-                        data_read_bytes=0
-                    fi
-
-                    if echo "$smart_output" | grep "Data Units Written:" | grep -q "TB"; then
-                        tb_written=$(echo "$smart_output" | grep "Data Units Written:" | grep -oE '\[[0-9.]+[[:space:]]*TB\]' | sed 's/\[\([0-9.]*\)[[:space:]]*TB\]/\1/')
-                        if [ -n "$tb_written" ]; then
-                            data_written_bytes=$(echo "$tb_written * 1000000000000" | bc -l | cut -d. -f1)
-                        else
-                            data_written_bytes=0
-                        fi
-                    else
-                        data_written_bytes=0
-                    fi
-
-                    # Temperature sensors
-                    temp_sensor_1=$(echo "$smart_output" | grep "Temperature Sensor 1:" | awk '{print $4}')
-                    temp_sensor_2=$(echo "$smart_output" | grep "Temperature Sensor 2:" | awk '{print $4}')
+                    # For data_read_bytes and data_written_bytes, we use the TB values from nvme smart-log directly
+                    data_read_bytes=$(echo "$smart_output" | grep "Data Units Read" | awk '{print $5}' | sed 's/[()]//g' | sed 's/TB//' | xargs printf "%.0f" "$(cat -) * 1000000000000")
+                    data_written_bytes=$(echo "$smart_output" | grep "Data Units Written" | awk '{print $5}' | sed 's/[()]//g' | sed 's/TB//' | xargs printf "%.0f" "$(cat -) * 1000000000000")
+                    
+                    # Temperature sensors (Temperature Sensor 1, Temperature Sensor 2)
+                    temp_sensor_1=$(echo "$smart_output" | grep "Temperature Sensor 1" | awk '{print $4}' | sed 's/°C.*//')
+                    temp_sensor_2=$(echo "$smart_output" | grep "Temperature Sensor 2" | awk '{print $4}' | sed 's/°C.*//')
 
                     # Output metrics with device labels
                     labels="device=\"$device_name\",model=\"$model\",serial=\"$serial\",firmware=\"$firmware\""
@@ -246,7 +230,7 @@ extract_temp() {
             # Skip header
             if [[ "$name" == "NAME" ]]; then
                 continue
-            fi
+            }
 
             # Convert sizes
             used_bytes=$(convert_to_bytes "$used")

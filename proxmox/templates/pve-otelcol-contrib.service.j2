@@ -1,0 +1,41 @@
+# pve-otelcol-contrib.service.j2
+[Unit]
+Description=OpenTelemetry Collector Contrib (Proxmox)
+Documentation=https://opentelemetry.io/docs/collector/
+After=network-online.target pve-metrics-exporter.service
+Wants=network-online.target pve-metrics-exporter.service
+
+[Service]
+Type=simple
+User={{ otel_user }}
+Group={{ otel_group }}
+WorkingDirectory={{ otel_home }}
+ExecStart={{ otel_home }}/otelcol-contrib --config={{ otel_config_dir }}/config.yaml
+Restart=always
+RestartSec=5s
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths={{ otel_log_dir }} {{ otel_data_dir }}
+ReadOnlyPaths=/sys /proc /etc/pve
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+MemoryMax=1G
+CPUQuota=50%
+
+# Capabilities for reading system metrics
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=otelcol-contrib
+
+[Install]
+WantedBy=multi-user.target

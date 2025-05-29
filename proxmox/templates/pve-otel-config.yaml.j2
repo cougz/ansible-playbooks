@@ -1,80 +1,15 @@
 receivers:
-  # Receiver for Proxmox-specific metrics
+  # Receiver for Proxmox metrics from our exporter script
   prometheus:
     config:
       scrape_configs:
-        - job_name: 'proxmox-metrics'
-          scrape_interval: {{ pve_metrics_scrape_interval | default('30s') }}
+        - job_name: 'proxmox-metrics-exporter'
+          scrape_interval: 30s
           static_configs:
             - targets: ['localhost:9100']
           metrics_path: /metrics
 
-  # Host metrics for general system monitoring
-  hostmetrics:
-    collection_interval: 30s
-    scrapers:
-      cpu:
-        metrics:
-          system.cpu.utilization:
-            enabled: true
-          system.cpu.time:
-            enabled: true
-      disk:
-        metrics:
-          system.disk.io:
-            enabled: true
-          system.disk.operations:
-            enabled: true
-          system.disk.io_time:
-            enabled: true
-          system.disk.pending_operations:
-            enabled: true
-      filesystem:
-        metrics:
-          system.filesystem.usage:
-            enabled: true
-          system.filesystem.utilization:
-            enabled: true
-      load:
-        metrics:
-          system.cpu.load_average.1m:
-            enabled: true
-          system.cpu.load_average.5m:
-            enabled: true
-          system.cpu.load_average.15m:
-            enabled: true
-      memory:
-        metrics:
-          system.memory.usage:
-            enabled: true
-          system.memory.utilization:
-            enabled: true
-      network:
-        metrics:
-          system.network.io:
-            enabled: true
-          system.network.packets:
-            enabled: true
-          system.network.errors:
-            enabled: true
-          system.network.dropped:
-            enabled: true
-          system.network.connections:
-            enabled: true
-      paging:
-        metrics:
-          system.paging.usage:
-            enabled: true
-          system.paging.operations:
-            enabled: true
-      processes:
-        metrics:
-          system.processes.count:
-            enabled: true
-          system.processes.created:
-            enabled: true
-
-  # OTLP receiver for applications
+  # OTLP receiver for applications or other telemetry sources
   otlp:
     protocols:
       grpc:
@@ -83,115 +18,69 @@ receivers:
         endpoint: "0.0.0.0:4318"
 
 processors:
-  # Memory limiter
+  # Memory limiter to prevent the collector from using too much memory
   memory_limiter:
     check_interval: 5s
     limit_percentage: 75
     spike_limit_percentage: 20
 
-  # Resource attributes for Proxmox host identification
-  resource:
-    attributes:
-      - key: service.name
-        value: "proxmox-ve"
-        action: upsert
-      - key: service.instance.id
-        value: "{{ ansible_hostname }}"
-        action: upsert
-      - key: host.name
-        value: "{{ ansible_hostname }}"
-        action: upsert
-      - key: host.type
-        value: "proxmox"
-        action: upsert
-      - key: os.type
+  # Attributes processor to add custom labels that become Prometheus labels
+  attributes:
+    actions:
+      - key: os_type
         value: "linux"
         action: upsert
-      # Proxmox specific attributes
-      - key: proxmox.cluster.name
-        value: "{{ proxmox_cluster_name | default('standalone') }}"
+      - key: host_name
+        value: "{{ ansible_hostname }}"
         action: upsert
-      - key: proxmox.node.name
+      - key: app_name
+        value: "proxmox-monitoring"
+        action: upsert
+      - key: proxmox_node
         value: "{{ inventory_hostname }}"
         action: upsert
-      - key: deployment.environment
-        value: "production"
-        action: upsert
 
-  # Transform processor to ensure consistent metric names
-  transform/metrics:
-    error_mode: ignore
-    trace_statements:
-      - context: metric
-        statements:
-          # Ensure Proxmox metrics have consistent naming
-          - set(name, "proxmox." + name) where IsMatch(name, "^pve_")
-
-  # Batch processor
+  # Batch processor to group telemetry data before exporting
   batch:
     timeout: 5s
     send_batch_size: 512
 
 exporters:
-  # OTLP exporter to your monitoring stack
+  # OTLP exporter to send data to your LGTM stack
   otlp:
     endpoint: "{{ otel_endpoint }}"
     tls:
       insecure: true
-    sending_queue:
-      enabled: true
-      num_consumers: 10
-      queue_size: 1000
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
 
-  # Debug exporter (remove in production)
+  # Debug exporter (optional, prints telemetry to collector logs)
   debug:
     verbosity: basic
-    sampling_initial: 5
-    sampling_thereafter: 20
 
 extensions:
-  # Health check
+  # Health check extension for monitoring collector status
   health_check:
     endpoint: "127.0.0.1:13133"
-  
-  # Performance profiler
-  pprof:
-    endpoint: "127.0.0.1:1777"
 
 service:
-  extensions: [health_check, pprof]
-  
+  extensions: [health_check]
   pipelines:
-    metrics/system:
-      receivers: [hostmetrics]
-      processors: [memory_limiter, resource, batch]
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [memory_limiter, attributes, batch]  # attributes processor adds labels that become Prometheus labels
       exporters: [otlp, debug]
-    
-    metrics/proxmox:
-      receivers: [prometheus]
-      processors: [memory_limiter, resource, transform/metrics, batch]
-      exporters: [otlp, debug]
-    
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
+      processors: [attributes, batch]
       exporters: [otlp]
-    
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
+      processors: [attributes, batch]
       exporters: [otlp]
-  
+
+  # Collector's own telemetry settings
   telemetry:
     logs:
       level: info
-      output_paths: ["{{ otel_log_dir }}/otelcol.log"]
-      error_output_paths: ["{{ otel_log_dir }}/otelcol-error.log"]
     metrics:
       level: basic
       address: "127.0.0.1:8888"

@@ -1,0 +1,47 @@
+# pve-metrics.service.j2
+[Unit]
+Description=Proxmox Metrics Exporter
+Documentation=https://prometheus.io/docs/instrumenting/exporters/
+After=network.target pve-cluster.service
+Wants=network.target
+
+[Service]
+Type=simple
+User={{ otel_user }}
+Group={{ otel_group }}
+ExecStart=/usr/bin/python3 {{ pve_exporter_app_path }}
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={{ otel_data_dir }}
+ReadOnlyPaths=/sys /proc /etc/pve
+PrivateTmp=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=25%
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=FLASK_ENV=production
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pve-metrics-exporter
+
+[Install]
+WantedBy=multi-user.target

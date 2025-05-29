@@ -1,4 +1,3 @@
----
 - name: Install OpenTelemetry Collector Contrib on Proxmox Hosts
   hosts: proxmox
   gather_facts: yes
@@ -103,8 +102,29 @@
           - sysstat
           - bc
           - iproute2
+          - smartmontools # Added smartmontools
         state: present
         update_cache: yes
+
+    # NEW TASKS FOR NVME PERMISSIONS
+    - name: Create udev rule for NVMe device permissions
+      copy:
+        content: |
+          # Grant read/write access to NVMe character devices for the '{{ otel_group }}' group
+          SUBSYSTEM=="nvme", KERNEL=="nvme[0-9]*", MODE="0660", GROUP="{{ otel_group }}"
+        dest: "/etc/udev/rules.d/99-nvme-{{ otel_group }}.rules"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload udev
+
+    - name: Reload udev rules to apply new permissions
+      command: udevadm control --reload-rules
+      changed_when: true # Always report as changed to ensure trigger runs
+
+    - name: Trigger udev to re-evaluate devices
+      command: udevadm trigger
+      changed_when: true # Always report as changed to ensure permissions are applied
 
     - name: Copy Proxmox metrics script
       template:
@@ -227,3 +247,7 @@
       systemd:
         name: otelcol-contrib
         state: restarted
+
+    - name: reload udev
+      command: udevadm control --reload-rules
+      changed_when: true # Always report as changed for handler

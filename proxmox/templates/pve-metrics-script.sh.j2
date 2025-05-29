@@ -1,10 +1,38 @@
 #!/bin/bash
-# pve-metrics-script.sh.j2 - Proxmox-specific metrics collection
-# This script collects metrics specific to Proxmox hosts including ZFS pools, NVMe SMART data, and temperatures
+# pve-metrics-script.sh - Proxmox-specific metrics collection
+# This script collects metrics specific to Proxmox hosts, including ZFS pools,
+# NVMe SMART temperature data, CPU temperatures, CPU load average,
+# and other general system resources like memory and network I/O.
 
 # Define the output file for Prometheus metrics
 METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/pve_metrics.prom"
 TEMP_OUTPUT_FILE="${METRICS_OUTPUT_FILE}.tmp"
+
+# --- Debugging setup ---
+# Log file for script execution debug messages
+DEBUG_LOG="/tmp/pve_metrics_script_debug.log"
+
+# Function to write debug messages (more robust for file creation/permissions)
+debug_log() {
+    # Attempt to create the directory if it doesn't exist; ignore errors if it exists
+    mkdir -p "$(dirname "$DEBUG_LOG")" 2>/dev/null || true
+    # Attempt to touch the file to ensure it exists; ignore errors
+    touch "$DEBUG_LOG" 2>/dev/null || true
+
+    # Now, attempt to write to the file. If that fails, fallback to stderr.
+    echo "$(date -Iseconds) [DEBUG] $1" >> "$DEBUG_LOG" 2>&1 || \
+    {
+        echo "$(date -Iseconds) [DEBUG] (Fallback to stderr) $1" >&2
+    }
+}
+
+# Clear the debug log at the start of each run (optional, remove if you want historical logs)
+# Use '|| true' to prevent script exit if deletion fails
+> "$DEBUG_LOG" || true
+debug_log "Script started."
+
+# --- End Debugging setup ---
+
 
 # Function to output metric with labels
 output_metric() {
@@ -15,6 +43,7 @@ output_metric() {
 
     echo "# TYPE $metric_name $metric_type"
     echo "${metric_name}{${additional_labels}} $value"
+    debug_log "Metric output: ${metric_name}{${additional_labels}} $value"
 }
 
 # Function to convert human readable sizes to bytes
@@ -32,70 +61,59 @@ convert_to_bytes() {
     esac
 }
 
-# Function to extract temperature value from sensors output
+# Function to extract temperature value from sensors output (this is for 'sensors' command, not NVMe)
 extract_temp() {
     echo "$1" | grep -oE '\+[0-9]+\.[0-9]+°C' | head -1 | sed 's/+\([0-9.]*\)°C/\1/'
 }
 
-{
+{ # Start of the block redirected to the temporary file
+
     echo "# Proxmox VE metrics"
     echo "# Generated at $(date -Iseconds)"
 
-    # === NVMe SMART Metrics ===
+    debug_log "Collecting NVMe SMART Temperature Metrics..."
+    # === NVMe SMART Temperature Metrics (only) ===
     if command -v nvme >/dev/null 2>&1; then
+        debug_log "nvme command found."
         # Check for NVMe devices directly
         for nvme_device in /dev/nvme[0-9]; do
             if [ -e "$nvme_device" ]; then
                 device_name=$(basename "$nvme_device")
+                debug_log "Found NVMe device: $nvme_device"
 
                 # Get SMART data using nvme-cli
-                # Note: No sudo needed here due to setcap
-                smart_output=$(/usr/sbin/nvme smart-log "$nvme_device" 2>/dev/null)
+                smart_output=$(/usr/sbin/nvme smart-log "$nvme_device" 2>&1) # Capture stdout and stderr
+                smart_status=$?
 
-                if [ $? -eq 0 ]; then
-                    # Extract basic device info (nvme-cli doesn't directly provide model/serial in smart-log, you might need 'identify' for that)
-                    # For simplicity, we'll try to get it from 'nvme identify' if smart-log doesn't have it.
-                    identify_output=$(/usr/sbin/nvme identify "$nvme_device" 2>/dev/null)
-                    model=$(echo "$identify_output" | grep "Model Number:" | awk -F':' '{print $2}' | xargs)
-                    serial=$(echo "$identify_output" | grep "Serial Number:" | awk -F':' '{print $2}' | xargs)
-                    firmware=$(echo "$identify_output" | grep "Firmware Version:" | awk -F':' '{print $2}' | xargs)
+                if [ $smart_status -eq 0 ]; then
+                    debug_log "nvme smart-log for $nvme_device succeeded."
 
-                    # Health status (critical_warning: 0 for healthy, >0 for warning/critical)
-                    critical_warning=$(echo "$smart_output" | grep "critical_warning" | awk '{print $3}')
-                    health_value=1 # Assume healthy
-                    if [ "$critical_warning" -ne 0 ]; then
-                        health_value=0 # Not healthy
+                    # Use 'id-ctrl' instead of 'identify' for controller information
+                    id_ctrl_output=$(/usr/sbin/nvme id-ctrl "$nvme_device" 2>&1) # Capture stdout and stderr
+                    id_ctrl_status=$?
+
+                    model="unknown"
+                    serial="unknown"
+                    firmware="unknown"
+
+                    if [ $id_ctrl_status -ne 0 ]; then
+                        debug_log "# ERROR: Failed to run nvme id-ctrl for $nvme_device. Output: $id_ctrl_output"
+                    else
+                        # Extract model, serial, firmware from id-ctrl output (using 'mn', 'sn', 'fr')
+                        model=$(echo "$id_ctrl_output" | grep -E '^\s*mn\s*:' | awk -F':' '{print $2}' | xargs)
+                        serial=$(echo "$id_ctrl_output" | grep -E '^\s*sn\s*:' | awk -F':' '{print $2}' | xargs)
+                        firmware=$(echo "$id_ctrl_output" | grep -E '^\s*fr\s*:' | awk -F':' '{print $2}' | xargs)
+                        debug_log "Identified $device_name - Model: '$model', Serial: '$serial', Firmware: '$firmware'"
                     fi
 
-                    # Extract SMART values from nvme smart-log output
-                    temperature=$(echo "$smart_output" | grep "temperature" | awk '{print $3}' | sed 's/°C.*//')
-                    available_spare=$(echo "$smart_output" | grep "available_spare" | awk '{print $3}' | sed 's/%//')
-                    available_spare_threshold=$(echo "$smart_output" | grep "available_spare_threshold" | awk '{print $3}' | sed 's/%//')
-                    percentage_used=$(echo "$smart_output" | grep "percentage_used" | awk '{print $3}' | sed 's/%//')
-                    power_cycles=$(echo "$smart_output" | grep "power_cycles" | awk '{print $3}')
-                    power_on_hours=$(echo "$smart_output" | grep "power_on_hours" | awk '{print $3}')
-                    unsafe_shutdowns=$(echo "$smart_output" | grep "unsafe_shutdowns" | awk '{print $3}')
-                    media_errors=$(echo "$smart_output" | grep "media_errors" | awk '{print $3}')
-                    error_log_entries=$(echo "$smart_output" | grep "num_err_log_entries" | awk '{print $3}')
+                    # Extract ONLY temperature values from nvme smart-log output
+                    temperature=$(echo "$smart_output" | grep -E '^\s*temperature\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
+                    temp_sensor_1=$(echo "$smart_output" | grep -E '^\s*Temperature Sensor 1\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
+                    temp_sensor_2=$(echo "$smart_output" | grep -E '^\s*Temperature Sensor 2\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
 
-                    # Data units (nvme smart-log provides these directly as decimal values)
-                    data_units_read=$(echo "$smart_output" | grep "Data Units Read" | awk '{print $4}' | sed 's/,//g')
-                    data_units_written=$(echo "$smart_output" | grep "Data Units Written" | awk '{print $4}' | sed 's/,//g')
-
-                    # For data_read_bytes and data_written_bytes, we use the TB values from nvme smart-log directly
-                    data_read_bytes=$(echo "$smart_output" | grep "Data Units Read" | awk '{print $5}' | sed 's/[()]//g' | sed 's/TB//' | xargs printf "%.0f" "$(cat -) * 1000000000000")
-                    data_written_bytes=$(echo "$smart_output" | grep "Data Units Written" | awk '{print $5}' | sed 's/[()]//g' | sed 's/TB//' | xargs printf "%.0f" "$(cat -) * 1000000000000")
-                    
-                    # Temperature sensors (Temperature Sensor 1, Temperature Sensor 2)
-                    temp_sensor_1=$(echo "$smart_output" | grep "Temperature Sensor 1" | awk '{print $4}' | sed 's/°C.*//')
-                    temp_sensor_2=$(echo "$smart_output" | grep "Temperature Sensor 2" | awk '{print $4}' | sed 's/°C.*//')
-
-                    # Output metrics with device labels
+                    # Output ONLY NVMe temperature metrics with device labels
                     labels="device=\"$device_name\",model=\"$model\",serial=\"$serial\",firmware=\"$firmware\""
 
-                    output_metric "pve_nvme_health_status" "gauge" "$health_value" "$labels"
-
-                    # Temperature metrics
                     if [ -n "$temperature" ]; then
                         output_metric "pve_nvme_temperature_celsius" "gauge" "$temperature" "$labels"
                     fi
@@ -106,306 +124,217 @@ extract_temp() {
                         output_metric "pve_nvme_temperature_sensor2_celsius" "gauge" "$temp_sensor_2" "$labels"
                     fi
 
-                    # Wear and reliability metrics
-                    if [ -n "$available_spare" ]; then
-                        output_metric "pve_nvme_available_spare_percent" "gauge" "$available_spare" "$labels"
-                    fi
-                    if [ -n "$available_spare_threshold" ]; then
-                        output_metric "pve_nvme_available_spare_threshold_percent" "gauge" "$available_spare_threshold" "$labels"
-                    fi
-                    if [ -n "$percentage_used" ]; then
-                        output_metric "pve_nvme_percentage_used" "gauge" "$percentage_used" "$labels"
-                    fi
-
-                    # Usage metrics
-                    if [ -n "$power_cycles" ]; then
-                        output_metric "pve_nvme_power_cycles_total" "counter" "$power_cycles" "$labels"
-                    fi
-                    if [ -n "$power_on_hours" ]; then
-                        output_metric "pve_nvme_power_on_hours_total" "counter" "$power_on_hours" "$labels"
-                    fi
-                    if [ -n "$unsafe_shutdowns" ]; then
-                        output_metric "pve_nvme_unsafe_shutdowns_total" "counter" "$unsafe_shutdowns" "$labels"
-                    fi
-
-                    # Error metrics
-                    if [ -n "$media_errors" ]; then
-                        output_metric "pve_nvme_media_errors_total" "counter" "$media_errors" "$labels"
-                    fi
-                    if [ -n "$error_log_entries" ]; then
-                        output_metric "pve_nvme_error_log_entries_total" "counter" "$error_log_entries" "$labels"
-                    fi
-
-                    # Data transfer metrics
-                    if [ -n "$data_units_read" ]; then
-                        output_metric "pve_nvme_data_units_read_total" "counter" "$data_units_read" "$labels"
-                    fi
-                    if [ -n "$data_units_written" ]; then
-                        output_metric "pve_nvme_data_units_written_total" "counter" "$data_units_written" "$labels"
-                    fi
-                    if [ -n "$data_read_bytes" ] && [ "$data_read_bytes" -gt 0 ]; then
-                        output_metric "pve_nvme_data_read_bytes_total" "counter" "$data_read_bytes" "$labels"
-                    fi
-                    if [ -n "$data_written_bytes" ] && [ "$data_written_bytes" -gt 0 ]; then
-                        output_metric "pve_nvme_data_written_bytes_total" "counter" "$data_written_bytes" "$labels"
-                    fi
+                else
+                    debug_log "Failed to get nvme smart-log for $nvme_device. Error: $smart_output"
+                    echo "# WARN: Failed to collect NVMe SMART temperature data for $nvme_device: $smart_output"
                 fi
+            else
+                debug_log "NVMe device $nvme_device does not exist."
             fi
         done
+    else
+        debug_log "nvme command not found, skipping NVMe temperature metrics."
     fi
 
+    debug_log "Collecting CPU Temperature Metrics..."
     # === CPU Temperature Metrics ===
+    # Using 'sensors' command to get CPU core temperatures
     if command -v sensors >/dev/null 2>&1; then
+        debug_log "sensors command found."
         sensors_output=$(sensors 2>/dev/null)
-
-        # CPU Core temperatures only
-        echo "$sensors_output" | grep "^Core [0-9]" | while read -r line; do
-            core_num=$(echo "$line" | grep -oE "Core [0-9]+" | grep -oE "[0-9]+")
-            temp_value=$(extract_temp "$line")
-
-            if [ -n "$temp_value" ]; then
-                output_metric "pve_cpu_core_temperature_celsius" "gauge" "$temp_value" "core=\"$core_num\""
+        if [ $? -eq 0 ]; then
+            # Package temperature
+            package_temp=$(echo "$sensors_output" | grep -E '^(Package id 0|CPU Total):' | grep -oE '\+[0-9]+\.[0-9]+°C' | head -1 | sed 's/+\([0-9.]*\)°C/\1/')
+            if [ -n "$package_temp" ]; then
+                output_metric "pve_cpu_package_temperature_celsius" "gauge" "$package_temp" ""
             fi
-        done
 
-        # Package temperature
-        package_temp=$(echo "$sensors_output" | grep "Package id 0:" | head -1)
-        if [ -n "$package_temp" ]; then
-            temp_value=$(extract_temp "$package_temp")
-            if [ -n "$temp_value" ]; then
-                output_metric "pve_cpu_package_temperature_celsius" "gauge" "$temp_value" ""
-            fi
+            # Core temperatures
+            echo "$sensors_output" | grep "Core " | while read -r line; do
+                core_id=$(echo "$line" | awk '{print $2}' | sed 's/://')
+                core_temp=$(extract_temp "$line")
+                if [ -n "$core_temp" ]; then
+                    output_metric "pve_cpu_core_temperature_celsius" "gauge" "$core_temp" "core=\"$core_id\""
+                fi
+            done
+        else
+            debug_log "Failed to run sensors command. Output: $sensors_output"
+            echo "# WARN: Failed to collect CPU temperatures: $sensors_output"
         fi
+    else
+        debug_log "sensors command not found, skipping CPU temperature metrics."
     fi
 
+    debug_log "Collecting ZFS Pool Metrics..."
     # === ZFS Pool Metrics ===
     if command -v zpool >/dev/null 2>&1; then
-        # Get ZFS pool list output
-        while IFS= read -r line; do
-            # Skip header line
-            if [[ "$line" =~ ^NAME ]]; then
-                continue
-            fi
+        debug_log "zpool command found."
+        zpool_list=$(zpool list -p -H 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo "$zpool_list" | while read -r line; do
+                pool_name=$(echo "$line" | awk '{print $1}')
+                size=$(echo "$line" | awk '{print $2}')
+                allocated=$(echo "$line" | awk '{print $3}')
+                free=$(echo "$line" | awk '{print $4}')
+                fragmentation=$(echo "$line" | awk '{print $5}' | sed 's/%//')
+                capacity=$(echo "$line" | awk '{print $6}' | sed 's/%//')
+                dedup_ratio=$(echo "$line" | awk '{print $7}')
+                health=$(echo "$line" | awk '{print $9}')
+                status=$(echo "$line" | awk '{print $10}')
 
-            # Parse zpool list output
-            if [[ "$line" =~ ^([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+)[[:space:]]+([^ ]+) ]]; then
-                pool_name="${BASH_REMATCH[1]}"
-                size_human="${BASH_REMATCH[2]}"
-                alloc_human="${BASH_REMATCH[3]}"
-                free_human="${BASH_REMATCH[4]}"
-                frag="${BASH_REMATCH[7]}"
-                cap="${BASH_REMATCH[8]}"
-                dedup="${BASH_REMATCH[9]}"
-                health="${BASH_REMATCH[10]}"
+                labels="pool=\"$pool_name\""
 
-                # Convert human readable to bytes
-                size_bytes=$(convert_to_bytes "$size_human")
-                alloc_bytes=$(convert_to_bytes "$alloc_human")
-                free_bytes=$(convert_to_bytes "$free_human")
+                output_metric "pve_zfs_pool_size_bytes" "gauge" "$size" "$labels"
+                output_metric "pve_zfs_pool_allocated_bytes" "gauge" "$allocated" "$labels"
+                output_metric "pve_zfs_pool_free_bytes" "gauge" "$free" "$labels"
+                if [ -n "$fragmentation" ]; then
+                    output_metric "pve_zfs_pool_fragmentation_percent" "gauge" "$fragmentation" "$labels"
+                fi
+                output_metric "pve_zfs_pool_capacity_percent" "gauge" "$capacity" "$labels"
+                output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "$labels"
 
-                # Remove % from percentages
-                frag_percent=$(echo "$frag" | sed 's/%//')
-                cap_percent=$(echo "$cap" | sed 's/%//')
-                dedup_ratio=$(echo "$dedup" | sed 's/x//')
-
-                # Output ZFS metrics
-                output_metric "pve_zfs_pool_size_bytes" "gauge" "$size_bytes" "pool=\"$pool_name\""
-                output_metric "pve_zfs_pool_allocated_bytes" "gauge" "$alloc_bytes" "pool=\"$pool_name\""
-                output_metric "pve_zfs_pool_free_bytes" "gauge" "$free_bytes" "pool=\"$pool_name\""
-                output_metric "pve_zfs_pool_fragmentation_percent" "gauge" "$frag_percent" "pool=\"$pool_name\""
-                output_metric "pve_zfs_pool_capacity_percent" "gauge" "$cap_percent" "pool=\"$pool_name\""
-                output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "pool=\"$pool_name\""
-
-                # Health status as a labeled metric (1 for healthy, 0 for degraded)
+                # Health status: ONLINE=1, other=0
                 health_value=0
                 if [ "$health" = "ONLINE" ]; then
                     health_value=1
                 fi
-                output_metric "pve_zfs_pool_health" "gauge" "$health_value" "pool=\"$pool_name\",status=\"$health\""
-            fi
-        done < <(zpool list 2>/dev/null)
-
-        # Get ZFS dataset metrics
-        while IFS=$'\t' read -r name used avail refer mountpoint; do
-            # Skip header
-            if [[ "$name" == "NAME" ]]; then
-                continue; # Corrected: Changed '}' to '; fi'
-            fi
-
-            # Convert sizes
-            used_bytes=$(convert_to_bytes "$used")
-            avail_bytes=$(convert_to_bytes "$avail")
-            refer_bytes=$(convert_to_bytes "$refer")
-
-            # Clean dataset name for label
-            dataset_label=$(echo "$name" | sed 's/[^a-zA-Z0-9_-]/_/g')
-
-            output_metric "pve_zfs_dataset_used_bytes" "gauge" "$used_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
-            output_metric "pve_zfs_dataset_available_bytes" "gauge" "$avail_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
-            output_metric "pve_zfs_dataset_referenced_bytes" "gauge" "$refer_bytes" "dataset=\"$name\",mountpoint=\"$mountpoint\""
-        done < <(zfs list -H -o name,used,avail,refer,mountpoint 2>/dev/null)
-    fi
-
-    # === Proxmox VM/LXC Status ===
-    if command -v qm >/dev/null 2>&1; then
-        # Get VM status
-        while IFS=' ' read -r vmid status name; do
-            # Skip header
-            if [[ "$vmid" == "VMID" ]]; then
-                continue
-            fi
-
-            # VM status (1 for running, 0 for stopped)
-            status_value=0
-            if [ "$status" = "running" ]; then
-                status_value=1
-            fi
-
-            output_metric "pve_vm_status" "gauge" "$status_value" "vmid=\"$vmid\",name=\"$name\",status=\"$status\""
-        done < <(qm list 2>/dev/null | tail -n +2)
-    fi
-
-    if command -v pct >/dev/null 2>&1; then
-        # Get LXC status
-        while IFS=' ' read -r ctid status name; do
-            # Skip header
-            if [[ "$ctid" == "VMID" ]]; then
-                continue
-            fi
-
-            # LXC status (1 for running, 0 for stopped)
-            status_value=0
-            if [ "$status" = "running" ]; then
-                status_value=1
-            fi
-
-            output_metric "pve_lxc_status" "gauge" "$status_value" "ctid=\"$ctid\",name=\"$name\",status=\"$status\""
-        done < <(pct list 2>/dev/null | tail -n +2)
-    fi
-
-    # === Proxmox Cluster Status ===
-    if command -v pvecm >/dev/null 2>&1; then
-        # Check if node is in a cluster
-        if pvecm status >/dev/null 2>&1; then
-            cluster_status=$(pvecm status 2>/dev/null)
-
-            # Extract cluster info
-            quorum=$(echo "$cluster_status" | grep "Quorum information" -A 5 | grep "Quorate:" | awk '{print $2}')
-            nodes_total=$(echo "$cluster_status" | grep "Total nodes:" | awk '{print $3}')
-            nodes_online=$(echo "$cluster_status" | grep "Expected votes:" | awk '{print $3}')
-
-            quorum_value=0
-            if [ "$quorum" = "Yes" ]; then
-                quorum_value=1
-            fi
-
-            output_metric "pve_cluster_quorum" "gauge" "$quorum_value" ""
-            output_metric "pve_cluster_nodes_total" "gauge" "${nodes_total:-1}" ""
-            output_metric "pve_cluster_nodes_online" "gauge" "${nodes_online:-1}" ""
+                output_metric "pve_zfs_pool_health" "gauge" "$health_value" "${labels},status=\"$status\""
+            done
         else
-            # Single node setup
-            output_metric "pve_cluster_quorum" "gauge" "1" ""
-            output_metric "pve_cluster_nodes_total" "gauge" "1" ""
-            output_metric "pve_cluster_nodes_online" "gauge" "1" ""
+            debug_log "Failed to run zpool list. Output: $(zpool list -p -H 2>&1)"
+            echo "# WARN: Failed to collect ZFS pool data: $(zpool list -p -H 2>&1)"
         fi
+    else
+        debug_log "zpool command not found, skipping ZFS pool metrics."
     fi
 
-    # === Storage Status ===
-    # Parse Proxmox storage status
-    if command -v pvesm >/dev/null 2>&1; then
-        while IFS=' ' read -r storage type active total used avail percent; do
-            # Skip header and empty lines
-            if [[ "$storage" == "Name" ]] || [[ -z "$storage" ]]; then
-                continue
-            fi
+    debug_log "Collecting ZFS Dataset Metrics..."
+    # === ZFS Dataset Metrics ===
+    if command -v zfs >/dev/null 2>&1; then
+        debug_log "zfs command found."
+        zfs_list=$(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            echo "$zfs_list" | while read -r line; do
+                dataset_name=$(echo "$line" | awk '{print $1}')
+                used=$(echo "$line" | awk '{print $2}')
+                available=$(echo "$line" | awk '{print $3}')
+                referenced=$(echo "$line" | awk '{print $4}')
+                mountpoint=$(echo "$line" | awk '{print $5}')
 
-            # Only process if we have valid data
-            if [[ -n "$total" ]] && [[ "$total" != "0" ]]; then
-                # Convert to bytes (pvesm shows in KB)
-                total_bytes=$((total * 1024))
-                used_bytes=$((used * 1024))
-                avail_bytes=$((avail * 1024))
-
-                # Extract percentage (remove %)
-                usage_percent=$(echo "$percent" | sed 's/%//')
-
-                # Active status (1 or 0)
-                active_value=0
-                if [ "$active" = "active" ]; then
-                    active_value=1
+                labels="dataset=\"$dataset_name\""
+                if [ -n "$mountpoint" ] && [ "$mountpoint" != "-" ]; then
+                    labels="${labels},mountpoint=\"$mountpoint\""
                 fi
 
-                output_metric "pve_storage_total_bytes" "gauge" "$total_bytes" "storage=\"$storage\",type=\"$type\""
-                output_metric "pve_storage_used_bytes" "gauge" "$used_bytes" "storage=\"$storage\",type=\"$type\""
-                output_metric "pve_storage_available_bytes" "gauge" "$avail_bytes" "storage=\"$storage\",type=\"$type\""
-                output_metric "pve_storage_usage_percent" "gauge" "$usage_percent" "storage=\"$storage\",type=\"$type\""
-                output_metric "pve_storage_active" "gauge" "$active_value" "storage=\"$storage\",type=\"$type\""
-            fi
-        done < <(pvesm status 2>/dev/null | tail -n +2)
-    fi
-
-    # === System Information ===
-    # Proxmox version
-    if [ -f /etc/pve/.version ]; then
-        pve_version=$(cat /etc/pve/.version)
-        output_metric "pve_version_info" "gauge" "1" "version=\"$pve_version\""
-    fi
-
-    # Standard system metrics (CPU, Memory, etc.)
-    # These are similar to LXC but run at host level
-
-    # Memory metrics
-    if command -v free >/dev/null 2>&1; then
-        MEMORY_INFO=$(free -b 2>/dev/null)
-        if [ $? -eq 0 ]; then
-            TOTAL_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $2}')
-            USED_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $3}')
-            FREE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $4}')
-            AVAILABLE_MEM=$(echo "$MEMORY_INFO" | awk 'NR==2{print $7}')
-
-            output_metric "pve_memory_total_bytes" "gauge" "$TOTAL_MEM" ""
-            output_metric "pve_memory_used_bytes" "gauge" "$USED_MEM" ""
-            output_metric "pve_memory_free_bytes" "gauge" "$FREE_MEM" ""
-            output_metric "pve_memory_available_bytes" "gauge" "$AVAILABLE_MEM" ""
+                output_metric "pve_zfs_dataset_used_bytes" "gauge" "$used" "$labels"
+                output_metric "pve_zfs_dataset_available_bytes" "gauge" "$available" "$labels"
+                output_metric "pve_zfs_dataset_referenced_bytes" "gauge" "$referenced" "$labels"
+            done
+        else
+            debug_log "Failed to run zfs list. Output: $(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>&1)"
+            echo "# WARN: Failed to collect ZFS dataset data: $(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>&1)"
         fi
+    else
+        debug_log "zfs command not found, skipping ZFS dataset metrics."
     fi
 
-    # CPU metrics
-    CPU_COUNT=$(nproc 2>/dev/null || echo "1")
-    output_metric "pve_cpu_count" "gauge" "$CPU_COUNT" ""
+    debug_log "Collecting Proxmox Cluster Metrics..."
+    # === Proxmox Cluster Metrics ===
+    # Check if this is a cluster node
+    if command -v pvecm >/dev/null 2>&1 && pvecm status &>/dev/null; then
+        debug_log "pvecm command found and cluster status accessible."
+        # Quorum status
+        quorum=$(pvecm status | grep "Quorum:" | awk '{print $2}')
+        if [ -n "$quorum" ]; then
+            quorum_value=0
+            if [ "$quorum" = "yes" ]; then
+                quorum_value=1
+            fi
+            output_metric "pve_cluster_quorum" "gauge" "$quorum_value" ""
+        fi
 
-    # Load average
-    if [ -f /proc/loadavg ]; then
-        load_1min=$(awk '{print $1}' /proc/loadavg)
-        load_5min=$(awk '{print $2}' /proc/loadavg)
-        load_15min=$(awk '{print $3}' /proc/loadavg)
+        # Number of nodes
+        nodes_total=$(pvecm nodes | wc -l)
+        if [ "$nodes_total" -gt 0 ]; then
+            nodes_total=$((nodes_total - 1)) # Exclude header
+            output_metric "pve_cluster_nodes_total" "gauge" "$nodes_total" ""
+        fi
 
-        output_metric "pve_load_average_1m" "gauge" "$load_1min" ""
-        output_metric "pve_load_average_5m" "gauge" "$load_5min" ""
-        output_metric "pve_load_average_15m" "gauge" "$load_15min" ""
+        # Number of online nodes
+        nodes_online=$(pvecm nodes | grep "online" | wc -l)
+        output_metric "pve_cluster_nodes_online" "gauge" "$nodes_online" ""
+    else
+        debug_log "pvecm command not found or cluster status not accessible, skipping cluster metrics."
     fi
 
-    # Network interface metrics for physical interfaces
-    for interface in $(ls /sys/class/net/ | grep -E '^(en|eth|bond)'); do
-        if [ -f "/sys/class/net/$interface/statistics/rx_bytes" ]; then
-            rx_bytes=$(cat "/sys/class/net/$interface/statistics/rx_bytes")
-            tx_bytes=$(cat "/sys/class/net/$interface/statistics/tx_bytes")
-            rx_packets=$(cat "/sys/class/net/$interface/statistics/rx_packets")
-            tx_packets=$(cat "/sys/class/net/$interface/statistics/tx_packets")
+    debug_log "Collecting Proxmox Version Info..."
+    # === Proxmox Version Info ===
+    if [ -f /etc/debian_version ] && grep -q "Proxmox" /etc/os-release; then
+        debug_log "Proxmox OS detected."
+        pve_version=$(pveversion | head -n 1 | awk '{print $2}' | sed 's/#.*//')
+        # Use an empty string for the value, as the version is in the label
+        output_metric "pve_version_info" "gauge" "1" "version=\"$pve_version\""
+    else
+        debug_log "Proxmox OS not detected, skipping Proxmox version info."
+    fi
 
-            output_metric "pve_network_rx_bytes_total" "counter" "$rx_bytes" "interface=\"$interface\""
-            output_metric "pve_network_tx_bytes_total" "counter" "$tx_bytes" "interface=\"$interface\""
-            output_metric "pve_network_rx_packets_total" "counter" "$rx_packets" "interface=\"$interface\""
-            output_metric "pve_network_tx_packets_total" "counter" "$tx_packets" "interface=\"$interface\""
+    debug_log "Collecting System Resource Metrics..."
+    # === System Resource Metrics (General Linux/Proxmox) ===
+    # Memory
+    mem_info=$(free -b | grep "Mem:")
+    mem_total=$(echo "$mem_info" | awk '{print $2}')
+    mem_used=$(echo "$mem_info" | awk '{print $3}')
+    mem_free=$(echo "$mem_info" | awk '{print $4}')
+    mem_available=$(echo "$mem_info" | awk '{print $7}') # 'available' is more relevant than 'free'
+
+    output_metric "pve_memory_total_bytes" "gauge" "$mem_total" ""
+    output_metric "pve_memory_used_bytes" "gauge" "$mem_used" ""
+    output_metric "pve_memory_free_bytes" "gauge" "$mem_free" ""
+    output_metric "pve_memory_available_bytes" "gauge" "$mem_available" ""
+
+    # CPU Load Average
+    load_avg=$(cat /proc/loadavg)
+    load_1m=$(echo "$load_avg" | awk '{print $1}')
+    load_5m=$(echo "$load_avg" | awk '{print $2}')
+    load_15m=$(echo "$load_avg" | awk '{print $3}')
+    cpu_count=$(grep -c ^processor /proc/cpuinfo)
+
+    output_metric "pve_cpu_count" "gauge" "$cpu_count" ""
+    output_metric "pve_load_average_1m" "gauge" "$load_1m" ""
+    output_metric "pve_load_average_5m" "gauge" "$load_5m" ""
+    output_metric "pve_load_average_15m" "gauge" "$load_15m" ""
+
+    # Network I/O
+    # Exclude loopback (lo) and bridge interfaces (vmbr, docker0, etc.)
+    # Adjust regex to include bond/other specific interfaces if needed
+    for iface in $(ls -1 /sys/class/net | grep -E -v '^(lo|vmbr|docker|veth|br-)' 2>/dev/null); do
+        if [ -d "/sys/class/net/$iface/statistics" ]; then
+            rx_bytes=$(cat "/sys/class/net/$iface/statistics/rx_bytes" 2>/dev/null)
+            tx_bytes=$(cat "/sys/class/net/$iface/statistics/tx_bytes" 2>/dev/null)
+            rx_packets=$(cat "/sys/class/net/$iface/statistics/rx_packets" 2>/dev/null)
+            tx_packets=$(cat "/sys/class/net/$iface/statistics/tx_packets" 2>/dev/null)
+
+            if [ -n "$rx_bytes" ]; then
+                output_metric "pve_network_rx_bytes_total" "counter" "$rx_bytes" "interface=\"$iface\""
+            fi
+            if [ -n "$tx_bytes" ]; then
+                output_metric "pve_network_tx_bytes_total" "counter" "$tx_bytes" "interface=\"$iface\""
+            fi
+            if [ -n "$rx_packets" ]; then
+                output_metric "pve_network_rx_packets_total" "counter" "$rx_packets" "interface=\"$iface\""
+            fi
+            if [ -n "$tx_packets" ]; then
+                output_metric "pve_network_tx_packets_total" "counter" "$tx_packets" "interface=\"$iface\""
+            fi
         fi
     done
 
     echo "# End of metrics"
+    debug_log "Script finished successfully."
 
-} > "$TEMP_OUTPUT_FILE"
-
-# Atomically move the temp file to prevent partial reads
-if [ -f "$TEMP_OUTPUT_FILE" ]; then
-    mv "$TEMP_OUTPUT_FILE" "$METRICS_OUTPUT_FILE"
-    chmod 644 "$METRICS_OUTPUT_FILE"
-fi
+# Write all generated metrics to a temporary file, then move it atomically
+} > "$TEMP_OUTPUT_FILE" && mv "$TEMP_OUTPUT_FILE" "$METRICS_OUTPUT_FILE" || {
+    # If the script fails, log it and optionally delete the temp file
+    debug_log "Script failed at some point, metrics file not updated."
+    rm -f "$TEMP_OUTPUT_FILE" || true
+}

@@ -11,9 +11,9 @@ User={{ otel_user }}
 Group={{ otel_group }}
 # CAP_SYS_ADMIN is added to allow access for commands like nvme and sensors to read hardware data
 AmbientCapabilities=CAP_SYS_ADMIN
-ExecStart=/bin/bash {{ script_path }}
+ExecStart=/usr/bin/python3 {{ pve_exporter_app_path }}
 Restart=always
-RestartSec=30
+RestartSec=5
 TimeoutStopSec=20
 
 # Security settings
@@ -21,7 +21,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/otelcol-contrib
-# Added /dev to ReadOnlyPaths to allow smartctl to access device information (though our script uses nvme-cli directly)
+# Added /dev to ReadOnlyPaths to allow smartctl/nvme to access device information
 ReadOnlyPaths=/sys /proc /etc/pve /dev
 PrivateTmp=yes
 ProtectHostname=yes
@@ -37,10 +37,10 @@ RemoveIPC=yes
 MemoryMax=512M
 CPUQuota=25%
 
-# Environment (adjust if your script uses Python environments or other specific settings)
+# Environment
 Environment=PYTHONUNBUFFERED=1
 Environment=FLASK_DEBUG=0 # Updated for Flask 2.3+
-# Environment=FLASK_ENV=production # Old, deprecated setting - commented out as per your original
+# Environment=FLASK_ENV=production # Old, deprecated setting
 
 # Logging
 StandardOutput=journal

@@ -6,12 +6,8 @@ receivers:
           scrape_interval: 30s
           scrape_timeout: 15s
           static_configs:
-            - targets: ['127.0.0.1:9100']
+            - targets: ['localhost:9100']
           metrics_path: /metrics
-          metric_relabel_configs:
-            - source_labels: [__name__]
-              regex: 'up'
-              action: drop
 
   # OTLP receiver for applications or other telemetry sources
   otlp:
@@ -35,13 +31,13 @@ processors:
         value: "linux"
         action: upsert
       - key: host_name
-        value: "{{ ansible_hostname }}"
+        value: "t-pve2"
         action: upsert
       - key: app_name
         value: "proxmox-monitoring"
         action: upsert
       - key: proxmox_node
-        value: "{{ inventory_hostname }}"
+        value: "t-pve2.home.seiffert.me"
         action: upsert
 
   # Batch processor to group telemetry data before exporting
@@ -52,7 +48,7 @@ processors:
 exporters:
   # OTLP exporter to send data to your LGTM stack
   otlp:
-    endpoint: "{{ otel_endpoint }}"
+    endpoint: "infra-metrics1.home.seiffert.me:4317"
     tls:
       insecure: true
 

@@ -187,10 +187,12 @@ extract_temp() {
                 output_metric "pve_zfs_pool_size_bytes" "gauge" "$size" "$labels"
                 output_metric "pve_zfs_pool_allocated_bytes" "gauge" "$allocated" "$labels"
                 output_metric "pve_zfs_pool_free_bytes" "gauge" "$free" "$labels"
-                if [ -n "$fragmentation" ]; then
+                if [ -n "$fragmentation" ] && [ "$fragmentation" != "-" ]; then
                     output_metric "pve_zfs_pool_fragmentation_percent" "gauge" "$fragmentation" "$labels"
                 fi
-                output_metric "pve_zfs_pool_capacity_percent" "gauge" "$capacity" "$labels"
+                if [ -n "$capacity" ] && [ "$capacity" != "-" ]; then
+                    output_metric "pve_zfs_pool_capacity_percent" "gauge" "$capacity" "$labels"
+                fi
                 output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "$labels"
 
                 # Health status: ONLINE=1, other=0

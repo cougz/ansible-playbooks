@@ -16,7 +16,7 @@
 - name: Wait for OpenTelemetry service to start
   ansible.builtin.pause:
     seconds: 10
-  when: install_collector | bool or update_mode | bool
+  when: install_collector | bool or update_existing | bool
 
 - name: Verify collector is responding
   ansible.builtin.uri:
@@ -27,11 +27,11 @@
   retries: 3
   delay: 5
   become: yes
-  when: install_collector | bool or update_mode | bool
+  when: install_collector | bool or update_existing | bool
 
 - name: Display installation results
   debug:
     msg: |
       OpenTelemetry Collector installed and running.
       OpenTelemetry Collector metrics URL: http://{{ inventory_hostname }}:8888/metrics
-  when: install_collector | bool or update_mode | bool
+  when: install_collector | bool or update_existing | bool

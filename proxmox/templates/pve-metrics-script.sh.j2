@@ -4,6 +4,10 @@
 # NVMe SMART temperature data, CPU temperatures, CPU load average,
 # and other general system resources like memory and network I/O.
 
+# Disable color output to prevent ANSI escape sequences
+export NO_COLOR=1
+export TERM=dumb
+
 # Define the output file for Prometheus metrics
 METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/pve_metrics.prom"
 TEMP_OUTPUT_FILE="${METRICS_OUTPUT_FILE}.tmp"
@@ -33,6 +37,10 @@ debug_log "Script started."
 
 # --- End Debugging setup ---
 
+# Function to strip ANSI color codes from text
+strip_colors() {
+    echo "$1" | sed 's/\x1b\[[0-9;]*m//g'
+}
 
 # Function to output metric with labels
 output_metric() {
@@ -40,6 +48,10 @@ output_metric() {
     local metric_type=$2
     local value=$3
     local additional_labels=$4
+
+    # Strip any ANSI color codes from the value and labels
+    value=$(strip_colors "$value")
+    additional_labels=$(strip_colors "$additional_labels")
 
     echo "# TYPE $metric_name $metric_type"
     echo "${metric_name}{${additional_labels}} $value"
@@ -193,14 +205,25 @@ extract_temp() {
                 if [ -n "$capacity" ] && [ "$capacity" != "-" ]; then
                     output_metric "pve_zfs_pool_capacity_percent" "gauge" "$capacity" "$labels"
                 fi
-                output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "$labels"
+                # Fix for dedup_ratio - ensure it's numeric
+                if [ -n "$dedup_ratio" ] && [ "$dedup_ratio" != "-" ]; then
+                    output_metric "pve_zfs_pool_dedup_ratio" "gauge" "$dedup_ratio" "$labels"
+                fi
 
                 # Health status: ONLINE=1, other=0
+                # Fix: Ensure health and status are properly sanitized
                 health_value=0
                 if [ "$health" = "ONLINE" ]; then
                     health_value=1
                 fi
-                output_metric "pve_zfs_pool_health" "gauge" "$health_value" "${labels},status=\"$status\""
+                
+                # Sanitize status value to prevent parsing errors
+                safe_status=$(echo "$status" | tr -d '"' | tr -d "'" | tr ' ' '_')
+                if [ -z "$safe_status" ]; then
+                    safe_status="unknown"
+                fi
+                
+                output_metric "pve_zfs_pool_health" "gauge" "$health_value" "${labels},status=\"$safe_status\""
             done
         else
             debug_log "Failed to run zpool list. Output: $(zpool list -p -H 2>&1)"

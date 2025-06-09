@@ -4,13 +4,14 @@
   gather_facts: yes
   
   vars:
-    component_selection: "{{ component_selection | default('all') }}" 
+    # Default value without recursive references
+    component_selection: "all" # Options: "all", "otel", "metrics"
   
   pre_tasks:
     - name: Set derived component flags
       set_fact:
-        include_otel: "{{ component_selection == 'all' or component_selection == 'otel' }}"
-        include_metrics: "{{ component_selection == 'all' or component_selection == 'metrics' }}"
+        include_otel: "{{ (component_selection == 'all') or (component_selection == 'otel') }}"
+        include_metrics: "{{ (component_selection == 'all') or (component_selection == 'metrics') }}"
   
   roles:
     - role: ../roles/otel-collector

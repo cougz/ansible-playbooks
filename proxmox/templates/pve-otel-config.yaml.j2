@@ -31,13 +31,13 @@ processors:
         value: "linux"
         action: upsert
       - key: host_name
-        value: "t-pve2"
+        value: "{{ ansible_hostname }}"
         action: upsert
       - key: app_name
         value: "proxmox-monitoring"
         action: upsert
       - key: proxmox_node
-        value: "t-pve2.home.seiffert.me"
+        value: "{{ inventory_hostname }}"
         action: upsert
 
   # Batch processor to group telemetry data before exporting
@@ -48,7 +48,7 @@ processors:
 exporters:
   # OTLP exporter to send data to your LGTM stack
   otlp:
-    endpoint: "infra-metrics1.home.seiffert.me:4317"
+    endpoint: "{{ otel_endpoint }}"
     tls:
       insecure: true
 
@@ -66,7 +66,7 @@ service:
   pipelines:
     metrics:
       receivers: [prometheus, otlp]
-      processors: [memory_limiter, attributes, batch]  # attributes processor adds labels that become Prometheus labels
+      processors: [memory_limiter, attributes, batch]
       exporters: [otlp, debug]
     traces:
       receivers: [otlp]

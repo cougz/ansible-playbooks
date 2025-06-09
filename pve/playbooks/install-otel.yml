@@ -15,9 +15,9 @@
         update_mode: "{{ action_type == 'update' }}"
   
   roles:
-    - role: common
+    - role: ../roles/common
     
-    - role: otel-collector
+    - role: ../roles/otel-collector
       vars:
         install_collector: "{{ do_install }}"
         configure_collector: "{{ do_configure }}"

@@ -15,9 +15,9 @@
         update_mode: "{{ action_type == 'update' }}"
   
   roles:
-    - role: common
+    - role: ../roles/common
     
-    - role: metrics-exporter
+    - role: ../roles/metrics-exporter
       vars:
         install_exporter: "{{ do_install }}"
         configure_exporter: "{{ do_configure }}"

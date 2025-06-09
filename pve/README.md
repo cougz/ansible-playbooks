@@ -33,10 +33,10 @@ pve/
 When setting up a task in Semaphore:
 
 1. Select the appropriate playbook based on your needs:
-   - `main.yml` - For full control using extra variables
-   - `install-otel.yml` - For OpenTelemetry collector operations
-   - `install-metrics.yml` - For metrics exporter operations
-   - `configure-only.yml` - For updating configurations only
+   - `pve/playbooks/main.yml` - For full control using extra variables
+   - `pve/playbooks/install-otel.yml` - For OpenTelemetry collector operations
+   - `pve/playbooks/install-metrics.yml` - For metrics exporter operations
+   - `pve/playbooks/configure-only.yml` - For updating configurations only
 
 2. Set extra variables to control execution:
    ```yaml
@@ -50,7 +50,7 @@ When setting up a task in Semaphore:
    action_type: "install"  # Options: "install", "configure", "update"
    
    # Required variables
-   otel_endpoint: "http://your-otel-endpoint:4317"
+   otel_endpoint: "your-otel-endpoint:4317"  # Note: No http:// prefix needed
    otel_version: "0.126.0"
    metrics_collection_interval: 30
    ```
@@ -85,3 +85,15 @@ The metrics exporter role provides:
 ## Variables
 
 See the default variables in each role's `defaults/main.yml` file for customization options.
+
+## Note on Role Path
+
+The playbooks use relative paths to the roles:
+```yaml
+roles:
+  - role: ../roles/common
+  - role: ../roles/otel-collector
+  - role: ../roles/metrics-exporter
+```
+
+This ensures that roles are found correctly regardless of the working directory when running the playbooks.

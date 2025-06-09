@@ -9,7 +9,7 @@ otel_home: "/opt/otelcol-contrib"
 otel_config_dir: "/etc/otelcol-contrib"
 otel_log_dir: "/var/log/otelcol-contrib"
 otel_data_dir: "/var/lib/otelcol-contrib"
-otel_endpoint: "http://localhost:4317"  # Default for local testing, should be overridden via survey
+otel_endpoint: "localhost:4317"  # Default for local testing, should be overridden via survey
 
 # Configuration defaults
 otel_insecure_connection: true

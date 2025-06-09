@@ -25,16 +25,16 @@
         include_metrics: "{{ component_selection in ['all', 'metrics'] }}"
   
   roles:
-    - role: common
+    - role: ../roles/common
     
-    - role: otel-collector
+    - role: ../roles/otel-collector
       when: include_otel | bool
       vars:
         install_collector: "{{ perform_install }}"
         configure_collector: "{{ perform_configure }}"
         update_mode: "{{ perform_update }}"
     
-    - role: metrics-exporter
+    - role: ../roles/metrics-exporter
       when: include_metrics | bool
       vars:
         install_exporter: "{{ perform_install }}"

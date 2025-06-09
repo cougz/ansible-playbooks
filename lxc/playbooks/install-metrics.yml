@@ -12,7 +12,7 @@
       set_fact:
         do_install: "{{ (action_type == 'install') or (action_type == 'update') }}"
         do_configure: "{{ (action_type == 'configure') or (action_type == 'install') or (action_type == 'update') }}"
-        update_mode: "{{ action_type == 'update' }}"
+        update_existing: "{{ action_type == 'update' }}"
   
   roles:
     - role: ../roles/common
@@ -21,4 +21,4 @@
       vars:
         install_exporter: "{{ do_install }}"
         configure_exporter: "{{ do_configure }}"
-        update_existing: "{{ update_mode }}"
+        update_existing: "{{ update_existing }}"

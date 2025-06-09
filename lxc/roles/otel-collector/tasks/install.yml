@@ -49,7 +49,7 @@
     mode: '0644'
     timeout: 120
   become: yes
-  when: not update_mode | default(false) | bool or force_reinstall | default(false) | bool
+  when: not update_existing | default(false) | bool or force_reinstall | default(false) | bool
 
 - name: Extract OpenTelemetry Collector Contrib
   unarchive:
@@ -59,7 +59,7 @@
     owner: "{{ otel_user }}"
     group: "{{ otel_group }}"
   become: yes
-  when: not update_mode | default(false) | bool or force_reinstall | default(false) | bool
+  when: not update_existing | default(false) | bool or force_reinstall | default(false) | bool
 
 - name: Set executable permissions on otelcol-contrib binary
   file:

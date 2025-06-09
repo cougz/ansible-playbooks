@@ -32,11 +32,11 @@
       vars:
         install_collector: "{{ perform_install }}"
         configure_collector: "{{ perform_configure }}"
-        update_mode: "{{ perform_update }}"
+        update_existing: "{{ perform_update }}"
     
     - role: ../roles/metrics-exporter
       when: include_metrics | bool
       vars:
         install_exporter: "{{ perform_install }}"
         configure_exporter: "{{ perform_configure }}"
-        update_mode: "{{ perform_update }}"
+        update_existing: "{{ perform_update }}"

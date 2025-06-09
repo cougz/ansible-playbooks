@@ -93,15 +93,15 @@ extract_temp() {
                 device_name=$(basename "$nvme_device")
                 debug_log "Found NVMe device: $nvme_device"
 
-                # Get SMART data using nvme-cli
-                smart_output=$(/usr/sbin/nvme smart-log "$nvme_device" 2>&1) # Capture stdout and stderr
+                # Get SMART data using nvme-cli with color suppression
+                smart_output=$(TERM=dumb NO_COLOR=1 /usr/sbin/nvme smart-log "$nvme_device" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
                 smart_status=$?
 
                 if [ $smart_status -eq 0 ]; then
                     debug_log "nvme smart-log for $nvme_device succeeded."
 
                     # Use 'id-ctrl' instead of 'identify' for controller information
-                    id_ctrl_output=$(/usr/sbin/nvme id-ctrl "$nvme_device" 2>&1) # Capture stdout and stderr
+                    id_ctrl_output=$(TERM=dumb NO_COLOR=1 /usr/sbin/nvme id-ctrl "$nvme_device" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
                     id_ctrl_status=$?
 
                     model="unknown"
@@ -138,7 +138,9 @@ extract_temp() {
 
                 else
                     debug_log "Failed to get nvme smart-log for $nvme_device. Error: $smart_output"
-                    echo "# WARN: Failed to collect NVMe SMART temperature data for $nvme_device: $smart_output"
+                    # Only output the first line of error, stripped of ANSI codes
+                    clean_error=$(echo "$smart_output" | sed 's/\x1b\[[0-9;]*m//g' | head -1)
+                    echo "# WARN: Failed to collect NVMe SMART temperature data for $nvme_device: $clean_error"
                 fi
             else
                 debug_log "NVMe device $nvme_device does not exist."
@@ -153,7 +155,7 @@ extract_temp() {
     # Using 'sensors' command to get CPU core temperatures
     if command -v sensors >/dev/null 2>&1; then
         debug_log "sensors command found."
-        sensors_output=$(sensors 2>/dev/null)
+        sensors_output=$(TERM=dumb NO_COLOR=1 sensors 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
         if [ $? -eq 0 ]; then
             # Package temperature
             package_temp=$(echo "$sensors_output" | grep -E '^(Package id 0|CPU Total):' | grep -oE '\+[0-9]+\.[0-9]+°C' | head -1 | sed 's/+\([0-9.]*\)°C/\1/')
@@ -171,7 +173,7 @@ extract_temp() {
             done
         else
             debug_log "Failed to run sensors command. Output: $sensors_output"
-            echo "# WARN: Failed to collect CPU temperatures: $sensors_output"
+            echo "# WARN: Failed to collect CPU temperatures: $(echo "$sensors_output" | head -1)"
         fi
     else
         debug_log "sensors command not found, skipping CPU temperature metrics."
@@ -227,7 +229,7 @@ extract_temp() {
             done
         else
             debug_log "Failed to run zpool list. Output: $(zpool list -p -H 2>&1)"
-            echo "# WARN: Failed to collect ZFS pool data: $(zpool list -p -H 2>&1)"
+            echo "# WARN: Failed to collect ZFS pool data: $(zpool list -p -H 2>&1 | head -1)"
         fi
     else
         debug_log "zpool command not found, skipping ZFS pool metrics."
@@ -257,7 +259,7 @@ extract_temp() {
             done
         else
             debug_log "Failed to run zfs list. Output: $(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>&1)"
-            echo "# WARN: Failed to collect ZFS dataset data: $(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>&1)"
+            echo "# WARN: Failed to collect ZFS dataset data: $(zfs list -o name,used,avail,referenced,mountpoint -p -H 2>&1 | head -1)"
         fi
     else
         debug_log "zfs command not found, skipping ZFS dataset metrics."

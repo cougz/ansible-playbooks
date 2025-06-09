@@ -53,6 +53,12 @@ output_metric() {
     value=$(strip_colors "$value")
     additional_labels=$(strip_colors "$additional_labels")
 
+    # Validate that value is not empty and is numeric
+    if [[ -z "$value" ]] || ! [[ "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+        debug_log "Skipping invalid metric: ${metric_name} with value: '${value}'"
+        return
+    fi
+
     echo "# TYPE $metric_name $metric_type"
     echo "${metric_name}{${additional_labels}} $value"
     debug_log "Metric output: ${metric_name}{${additional_labels}} $value"
@@ -61,15 +67,60 @@ output_metric() {
 # Function to convert human readable sizes to bytes
 convert_to_bytes() {
     local size=$1
+    
+    # Handle empty input
+    if [[ -z "$size" ]]; then
+        echo "0"
+        return
+    fi
+    
     local number=$(echo "$size" | sed 's/[KMGT]$//')
     local unit=$(echo "$size" | sed 's/[0-9.]*//g')
+    
+    # Clean and validate number is numeric (handle edge cases like "1,0" or extra spaces)
+    number=$(echo "$number" | tr ',' '.' | sed 's/[[:space:]]//g')
+    if ! [[ "$number" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "0"
+        return
+    fi
 
     case "$unit" in
-        "K") echo "$number * 1024" | bc -l | cut -d. -f1 ;;
-        "M") echo "$number * 1024 * 1024" | bc -l | cut -d. -f1 ;;
-        "G") echo "$number * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
-        "T") echo "$number * 1024 * 1024 * 1024 * 1024" | bc -l | cut -d. -f1 ;;
-        *) echo "$number" | cut -d. -f1 ;;
+        "K") 
+            if command -v bc >/dev/null 2>&1; then
+                result=$(echo "$number * 1024" | bc -l 2>/dev/null | cut -d. -f1)
+                echo "${result:-0}"
+            else
+                echo $((${number%.*} * 1024))
+            fi
+            ;;
+        "M") 
+            if command -v bc >/dev/null 2>&1; then
+                result=$(echo "$number * 1024 * 1024" | bc -l 2>/dev/null | cut -d. -f1)
+                echo "${result:-0}"
+            else
+                echo $((${number%.*} * 1024 * 1024))
+            fi
+            ;;
+        "G") 
+            if command -v bc >/dev/null 2>&1; then
+                result=$(echo "$number * 1024 * 1024 * 1024" | bc -l 2>/dev/null | cut -d. -f1)
+                echo "${result:-0}"
+            else
+                echo $((${number%.*} * 1024 * 1024 * 1024))
+            fi
+            ;;
+        "T") 
+            if command -v bc >/dev/null 2>&1; then
+                result=$(echo "$number * 1024 * 1024 * 1024 * 1024" | bc -l 2>/dev/null | cut -d. -f1)
+                echo "${result:-0}"
+            else
+                echo $((${number%.*} * 1024 * 1024 * 1024 * 1024))
+            fi
+            ;;
+        *) 
+            # No unit, return the integer part
+            echo "${number%.*}"
+            ;;
     esac
 }
 

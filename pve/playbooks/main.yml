@@ -6,9 +6,9 @@
   vars:
     # Default values (can be overridden by Semaphore extra vars)
     component_selection: "{{ component_selection | default('all') }}" 
-    perform_install: "{{ perform_install | default(true) | bool }}"
-    perform_configure: "{{ perform_configure | default(true) | bool }}"
-    perform_update: "{{ perform_update | default(false) | bool }}"
+    perform_install: "{{ perform_install | default(true) }}"
+    perform_configure: "{{ perform_configure | default(true) }}"
+    perform_update: "{{ perform_update | default(false) }}"
   
   pre_tasks:
     - name: Display execution plan
@@ -21,8 +21,8 @@
   
     - name: Set derived component flags
       set_fact:
-        include_otel: "{{ component_selection in ['all', 'otel'] }}"
-        include_metrics: "{{ component_selection in ['all', 'metrics'] }}"
+        include_otel: "{{ component_selection == 'all' or component_selection == 'otel' }}"
+        include_metrics: "{{ component_selection == 'all' or component_selection == 'metrics' }}"
   
   roles:
     - role: ../roles/common

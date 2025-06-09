@@ -9,8 +9,8 @@
   pre_tasks:
     - name: Set derived component flags
       set_fact:
-        include_otel: "{{ component_selection in ['all', 'otel'] }}"
-        include_metrics: "{{ component_selection in ['all', 'metrics'] }}"
+        include_otel: "{{ component_selection == 'all' or component_selection == 'otel' }}"
+        include_metrics: "{{ component_selection == 'all' or component_selection == 'metrics' }}"
   
   roles:
     - role: ../roles/otel-collector

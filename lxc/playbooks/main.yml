@@ -1,0 +1,42 @@
+---
+- name: LXC OpenTelemetry and Metrics Management
+  hosts: lxc
+  gather_facts: yes
+  
+  vars:
+    # Default values for Semaphore extra vars
+    component_selection: "all" # Options: "all", "otel", "metrics"
+    perform_install: true
+    perform_configure: true
+    perform_update: false
+  
+  pre_tasks:
+    - name: Display execution plan
+      debug:
+        msg: |
+          Components: {{ component_selection }}
+          Will install: {{ perform_install }}
+          Will configure: {{ perform_configure }}
+          Update mode: {{ perform_update }}
+  
+    - name: Set derived component flags
+      set_fact:
+        include_otel: "{{ (component_selection == 'all') or (component_selection == 'otel') }}"
+        include_metrics: "{{ (component_selection == 'all') or (component_selection == 'metrics') }}"
+  
+  roles:
+    - role: ../roles/common
+    
+    - role: ../roles/otel-collector
+      when: include_otel | bool
+      vars:
+        install_collector: "{{ perform_install }}"
+        configure_collector: "{{ perform_configure }}"
+        update_mode: "{{ perform_update }}"
+    
+    - role: ../roles/metrics-exporter
+      when: include_metrics | bool
+      vars:
+        install_exporter: "{{ perform_install }}"
+        configure_exporter: "{{ perform_configure }}"
+        update_mode: "{{ perform_update }}"

@@ -1,0 +1,48 @@
+[Unit]
+Description=LXC Metrics Exporter with Background Collection
+Documentation=https://prometheus.io/docs/instrumenting/exporters/
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User={{ metrics_user }}
+Group={{ metrics_group }}
+ExecStart=/opt/lxc-metrics/venv/bin/python /opt/lxc-metrics/lxc-metrics-exporter.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/otelcol-contrib
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=read-only
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+RestrictNamespaces=yes
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=50%
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=FLASK_ENV=production
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lxc-metrics-exporter
+
+[Install]
+WantedBy=multi-user.target

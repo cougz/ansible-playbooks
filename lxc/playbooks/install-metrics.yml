@@ -1,0 +1,24 @@
+---
+- name: LXC Metrics Exporter Management
+  hosts: lxc
+  gather_facts: yes
+  
+  vars:
+    # Survey variable with default value (no recursive references)
+    action_type: "install"  # Options: "install", "configure", "update"
+  
+  pre_tasks:
+    - name: Set derived action flags
+      set_fact:
+        do_install: "{{ (action_type == 'install') or (action_type == 'update') }}"
+        do_configure: "{{ (action_type == 'configure') or (action_type == 'install') or (action_type == 'update') }}"
+        update_mode: "{{ action_type == 'update' }}"
+  
+  roles:
+    - role: ../roles/common
+    
+    - role: ../roles/metrics-exporter
+      vars:
+        install_exporter: "{{ do_install }}"
+        configure_exporter: "{{ do_configure }}"
+        update_existing: "{{ update_mode }}"

@@ -4,8 +4,8 @@
 METRICS_OUTPUT_FILE="/var/lib/otelcol-contrib/lxc_metrics.prom"
 TEMP_OUTPUT_FILE="${METRICS_OUTPUT_FILE}.tmp"
 
-# Configurable sampling interval from Ansible
-SAMPLING_INTERVAL_SECONDS={{ metrics_collection_interval | default(2) }}
+# Internal sampling interval for rate calculations (fixed at 2 seconds for quick execution)
+SAMPLING_INTERVAL_SECONDS=2
 
 # Create necessary directories and ensure ownership
 mkdir -p "$(dirname "$METRICS_OUTPUT_FILE")"

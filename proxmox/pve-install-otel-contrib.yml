@@ -14,8 +14,7 @@
     otel_data_dir: /var/lib/otelcol-contrib
     
     # Proxmox-specific metrics components
-    # Keeping script_filename here, though the Python app will handle metric generation
-    pve_metrics_script_filename: "pve-metrics-script.sh" # This is now just a placeholder filename
+    pve_metrics_script_filename: "pve-metrics-script.sh"
     pve_exporter_app_filename: "pve-metrics-exporter.py"
     pve_exporter_service_filename: "pve-metrics-exporter.service"
 
@@ -55,7 +54,7 @@
       user:
         name: "{{ otel_user }}"
         group: "{{ otel_group }}"
-        # Removed 'disk' group as it's no longer necessary with setcap on nvme binary
+        groups: "disk"  # Add to disk group for NVMe access
         system: yes
         shell: /bin/false
         home: "{{ otel_home }}"
@@ -105,8 +104,8 @@
           - bc
           - iproute2
           - nvme-cli
-          - libcap2-bin # Added libcap2-bin for setcap
-          - lm-sensors # Ensure lm-sensors is installed for 'sensors' command
+          - libcap2-bin
+          - lm-sensors
         state: present
         update_cache: yes
 
@@ -114,15 +113,22 @@
       ansible.builtin.command: getcap /usr/sbin/nvme
       register: nvme_getcap_result
       changed_when: false
-      ignore_errors: true # In case getcap fails or nvme is not found initially
+      ignore_errors: true
 
     - name: Apply setcap to /usr/sbin/nvme for cap_sys_admin+ep
       ansible.builtin.command: setcap 'cap_sys_admin+ep' /usr/sbin/nvme
       when: "'cap_sys_admin=ep' not in nvme_getcap_result.stdout | default('')"
-      # This task will only run if the required capability is NOT already set.
-      # You might also want to apply this to `sensors` binary if it's external,
-      # but usually `lm-sensors` handles permissions differently or via kernel modules.
-      # For now, focusing on nvme as it was the primary hurdle.
+
+    - name: Create udev rule for NVMe device permissions
+      ansible.builtin.copy:
+        content: |
+          # Allow otelcol group access to NVMe devices for SMART monitoring
+          KERNEL=="nvme[0-9]*", SUBSYSTEM=="nvme", GROUP="{{ otel_group }}", MODE="0640"
+        dest: /etc/udev/rules.d/99-nvme-otelcol.rules
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload udev rules
 
     - name: Copy Proxmox metrics script
       ansible.builtin.template:
@@ -232,3 +238,6 @@
       ansible.builtin.systemd:
         name: otelcol-contrib
         state: restarted
+
+    - name: reload udev rules
+      ansible.builtin.command: udevadm control --reload-rules && udevadm trigger

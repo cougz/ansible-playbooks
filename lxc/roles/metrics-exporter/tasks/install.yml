@@ -13,7 +13,7 @@
 
 - name: Copy LXC metrics script
   ansible.builtin.template:
-    src: "lxc-host-metrics.sh.j2"
+    src: "lxc-metrics.sh.j2"
     dest: "{{ metrics_script_path }}"
     owner: "{{ metrics_user | default(otel_user) }}"
     group: "{{ metrics_group | default(otel_group) }}"

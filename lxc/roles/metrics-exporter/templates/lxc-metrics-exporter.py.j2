@@ -10,7 +10,7 @@ from flask import Flask, Response, jsonify
 # Configuration from Ansible
 COLLECTION_INTERVAL = {{ metrics_collection_interval | default(5) }}  # seconds
 METRICS_FILE = '/var/lib/otelcol-contrib/lxc_metrics.prom'
-SCRIPT_PATH = '/opt/lxc-metrics/lxc-host-metrics.sh'
+SCRIPT_PATH = '/opt/lxc-metrics/lxc-metrics.sh'
 
 # Flask app setup
 app = Flask(__name__)

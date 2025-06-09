@@ -13,8 +13,8 @@
 
 - name: Copy metrics script (for data collection)
   template:
-    src: "lxc-host-metrics.sh.j2"
-    dest: "/opt/lxc-metrics/lxc-host-metrics.sh"
+    src: "lxc-metrics.sh.j2"
+    dest: "/opt/lxc-metrics/lxc-metrics.sh"
     mode: "0755"
     owner: "{{ otel_user | default('otelcol') }}"
     group: "{{ otel_group | default('otelcol') }}"

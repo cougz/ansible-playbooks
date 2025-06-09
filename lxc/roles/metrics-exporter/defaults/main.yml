@@ -7,7 +7,7 @@ metrics_group: "{{ otel_group | default('otelcol') }}"
 
 # File path settings
 metrics_home: "{{ otel_home | default('/opt/otelcol-contrib') }}" 
-metrics_script_filename: "lxc-host-metrics.sh"
+metrics_script_filename: "lxc-metrics.sh"
 metrics_exporter_app_filename: "lxc-metrics-exporter.py"
 metrics_exporter_service_filename: "lxc-metrics-exporter.service"
 

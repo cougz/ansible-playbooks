@@ -10,6 +10,8 @@
     - "/var/log/otelcol-contrib"
     - "/var/lib/otelcol-contrib"
     - "/etc/otelcol-contrib"
+    - "/opt/pve-metrics"
+    - "/opt/pve-metrics/venv"
   become: true
 
 - name: Ensure otelcol group exists
@@ -35,6 +37,7 @@
       - python3-pip
       - python3-setuptools
       - python3-venv
+      - python3-full
       - curl
       - lsb-release
       - gnupg
@@ -43,10 +46,26 @@
     update_cache: yes
   become: true
 
-- name: Install Python Flask for metrics exporter
+- name: Create Python virtual environment
+  command: python3 -m venv /opt/pve-metrics/venv
+  args:
+    creates: /opt/pve-metrics/venv/bin/python
+  become: true
+
+- name: Install Python packages in virtual environment
   pip:
     name:
       - flask
       - prometheus-client
     state: present
+    virtualenv: /opt/pve-metrics/venv
+  become: true
+
+- name: Set permissions on virtual environment
+  file:
+    path: /opt/pve-metrics
+    state: directory
+    owner: "{{ otel_user | default('otelcol') }}"
+    group: "{{ otel_group | default('otelcol') }}"
+    recurse: yes
   become: true

@@ -240,4 +240,4 @@
         state: restarted
 
     - name: reload udev rules
-      ansible.builtin.command: udevadm control --reload-rules && udevadm trigger
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger

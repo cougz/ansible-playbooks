@@ -295,13 +295,36 @@ if __name__ == '__main__':
         if any(not e.startswith("Warning") for e in config_errors):
             sys.exit(1)
     
-    # Start metrics collection thread
+    # Run initial metrics collection synchronously to ensure we have data before starting web server
+    log_message("Running initial metrics collection...")
+    try:
+        start_time = time.time()
+        result = subprocess.run([SCRIPT_PATH], 
+                              check=True, 
+                              timeout=60,
+                              capture_output=True,
+                              text=True)
+        
+        # Read the initial metrics
+        with open(METRICS_FILE, 'r') as f:
+            fresh_metrics = f.read()
+        
+        # Update global metrics
+        with metrics_lock:
+            current_metrics = fresh_metrics
+            last_update_time = time.time()
+        
+        collection_time = time.time() - start_time
+        log_message(f"Initial metrics collection completed in {collection_time:.2f}s")
+        
+    except Exception as e:
+        log_message(f"Initial metrics collection failed: {e}", "ERROR")
+        log_message("Web server will start but metrics may not be available immediately", "WARNING")
+    
+    # Start the background metrics collection thread for ongoing updates
+    log_message("Starting background metrics collection thread")
     metrics_thread = threading.Thread(target=collect_metrics, daemon=True)
     metrics_thread.start()
-    
-    # Wait for initial collection
-    log_message("Waiting for initial metrics collection...")
-    time.sleep(min(5, COLLECTION_INTERVAL))
     
     # Start Flask server
     log_message("Starting web server on {{ metrics_listen_address }}:{{ metrics_exporter_port | default(9100) }}")

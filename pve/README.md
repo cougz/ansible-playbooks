@@ -1,99 +1,76 @@
-# Proxmox VE OpenTelemetry and Metrics Collection
+# Proxmox VE Ansible Playbooks
 
-This directory contains a restructured version of the Proxmox OpenTelemetry and metrics collection playbooks.
+This directory contains Ansible roles and playbooks for managing OpenTelemetry Collector and Metrics Exporter on Proxmox VE hosts.
 
 ## Directory Structure
 
 ```
 pve/
-├── playbooks/                    # Ansible playbooks with modular execution support
-│   ├── main.yml                  # Main playbook with conditional execution
-│   ├── install-otel.yml          # OpenTelemetry-specific playbook
-│   ├── install-metrics.yml       # Metrics-specific playbook
-│   └── configure-only.yml        # Configuration-only playbook
+├── playbooks/               # Playbooks for different deployment scenarios
+│   ├── main.yml             # Complete installation playbook
+│   ├── install-otel.yml     # OpenTelemetry collector only
+│   ├── install-metrics.yml  # Metrics exporter only
+│   └── configure-only.yml   # Update configuration without reinstalling
 │
-├── roles/                        # Role-based organization
-│   ├── common/                   # Common tasks for all components
-│   ├── otel-collector/           # OpenTelemetry collector role
-│   │   ├── tasks/
-│   │   ├── templates/
-│   │   ├── defaults/
-│   │   └── handlers/
-│   └── metrics-exporter/         # Metrics exporter role
-│       ├── tasks/
-│       ├── templates/
-│       ├── defaults/
-│       └── handlers/
+├── roles/                   # Role definitions
+    ├── common/              # Shared dependencies and setup
+    ├── otel-collector/      # OpenTelemetry collector installation and config
+    └── metrics-exporter/    # Proxmox metrics exporter installation and config
 ```
+
+## Available Playbooks
+
+- **main.yml**: Full installation of both components
+- **install-otel.yml**: Install and configure OpenTelemetry collector only
+- **install-metrics.yml**: Install and configure metrics exporter only
+- **configure-only.yml**: Update configuration without reinstalling
 
 ## Usage
 
-### With Semaphore
+### Running from Semaphore
 
-When setting up a task in Semaphore:
+When running from Semaphore, use the playbooks directly with appropriate variables:
 
-1. Select the appropriate playbook based on your needs:
-   - `pve/playbooks/main.yml` - For full control using extra variables
-   - `pve/playbooks/install-otel.yml` - For OpenTelemetry collector operations
-   - `pve/playbooks/install-metrics.yml` - For metrics exporter operations
-   - `pve/playbooks/configure-only.yml` - For updating configurations only
+```bash
+# Full installation
+ansible-playbook pve/playbooks/main.yml
 
-2. Set extra variables to control execution:
-   ```yaml
-   # For main.yml
-   component_selection: "all"  # Options: "all", "otel", "metrics"
-   perform_install: true
-   perform_configure: true
-   perform_update: false
-   
-   # For component-specific playbooks
-   action_type: "install"  # Options: "install", "configure", "update"
-   
-   # Required variables
-   otel_endpoint: "your-otel-endpoint:4317"  # Note: No http:// prefix needed
-   otel_version: "0.126.0"
-   metrics_collection_interval: 30
-   ```
+# OpenTelemetry collector only
+ansible-playbook pve/playbooks/install-otel.yml
 
-### Playbook Selection Guide
+# Metrics exporter only
+ansible-playbook pve/playbooks/install-metrics.yml
 
-- **Full Installation**: Use `main.yml` with default variables
-- **Update Configuration Only**: Use `configure-only.yml` or `main.yml` with `perform_install: false, perform_configure: true`
-- **Update OpenTelemetry**: Use `install-otel.yml` with `action_type: "update"`
-- **Update Metrics Exporter**: Use `install-metrics.yml` with `action_type: "update"`
-
-## Components
-
-### OpenTelemetry Collector
-
-The OpenTelemetry collector role installs and configures the OpenTelemetry collector for Proxmox hosts. It includes:
-
-- OpenTelemetry Collector Contrib binary installation
-- Systemd service configuration
-- OTLP and Prometheus receivers configuration
-- Secure system permissions and capabilities
-
-### Metrics Exporter
-
-The metrics exporter role provides:
-
-- A shell script that collects Proxmox-specific metrics (host metrics, ZFS, NVMe temps, etc.)
-- A Python Flask application that exposes metrics in Prometheus format
-- Systemd service configuration
-- Health and status endpoints
-
-## Variables
-
-See the default variables in each role's `defaults/main.yml` file for customization options.
-
-## Note on Role Path
-
-The playbooks use relative paths to the roles:
-```yaml
-roles:
-  - role: ../roles/common
-  - role: ../roles/otel-collector
-  - role: ../roles/metrics-exporter
+# Update configuration only
+ansible-playbook pve/playbooks/configure-only.yml
 ```
 
-This ensures that roles are found correctly regardless of the working directory when running the playbooks.
+### Required Variables
+
+For OpenTelemetry collector:
+```yaml
+otel_endpoint: "your-otel-endpoint:4317"  # OTLP gRPC endpoint (no http:// prefix)
+otel_version: "0.126.0"                   # Collector version to install
+```
+
+For metrics exporter:
+```yaml
+metrics_collection_interval: 30  # Seconds between metrics collection
+```
+
+## Technical Details
+
+### Python Environment
+
+All Python dependencies are installed in a virtual environment at `/opt/pve-metrics/venv` to comply with externally managed environment restrictions on modern Debian/Ubuntu systems.
+
+### Service Configuration
+
+Both the OpenTelemetry collector and metrics exporter are configured as systemd services:
+
+- OpenTelemetry collector: `otelcol-contrib.service`
+- Metrics exporter: `metrics-exporter.service`
+
+### Permissions
+
+All services run as the `otelcol` user and group for better security.

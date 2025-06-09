@@ -1,0 +1,29 @@
+---
+# Common tasks for Proxmox OpenTelemetry and Metrics
+- name: Ensure required directories exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/log/otelcol-contrib
+    - /var/lib/otelcol-contrib
+    - /opt/otelcol-contrib
+    - /etc/otelcol-contrib
+  become: yes
+
+- name: Install common dependencies
+  apt:
+    name:
+      - python3-full
+      - python3-pip
+      - procps
+      - sysstat
+      - bc
+      - iproute2
+      - nvme-cli
+      - libcap2-bin
+      - lm-sensors
+    state: present
+    update_cache: yes
+  become: yes

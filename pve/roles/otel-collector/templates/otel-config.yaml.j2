@@ -1,0 +1,100 @@
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: '{{ prometheus_job_name | default("proxmox-metrics-exporter") }}'
+          scrape_interval: {{ otel_scrape_interval | default('30s') }}
+          scrape_timeout: {{ otel_scrape_timeout | default('15s') }}
+          static_configs:
+            - targets: ['{{ prometheus_target | default("localhost:9100") }}']
+          metrics_path: {{ prometheus_metrics_path | default('/metrics') }}
+
+  # OTLP receiver for applications or other telemetry sources
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "{{ otlp_grpc_endpoint | default('0.0.0.0:4317') }}"
+      http:
+        endpoint: "{{ otlp_http_endpoint | default('0.0.0.0:4318') }}"
+
+processors:
+  # Memory limiter to prevent the collector from using too much memory
+  memory_limiter:
+    check_interval: {{ memory_check_interval | default('5s') }}
+    limit_percentage: {{ otel_memory_limit_percentage | default(75) }}
+    spike_limit_percentage: {{ otel_memory_spike_percentage | default(20) }}
+
+  # Attributes processor to add custom labels that become Prometheus labels
+  attributes:
+    actions:
+      - key: os_type
+        value: "{{ os_type | default('linux') }}"
+        action: upsert
+      - key: host_name
+        value: "{{ ansible_hostname }}"
+        action: upsert
+      - key: app_name
+        value: "{{ app_name | default('proxmox-monitoring') }}"
+        action: upsert
+      - key: proxmox_node
+        value: "{{ inventory_hostname }}"
+        action: upsert
+      {% if custom_attributes is defined %}
+      {% for key, value in custom_attributes.items() %}
+      - key: {{ key }}
+        value: "{{ value }}"
+        action: upsert
+      {% endfor %}
+      {% endif %}
+
+  # Batch processor to group telemetry data before exporting
+  batch:
+    timeout: {{ otel_batch_timeout | default('5s') }}
+    send_batch_size: {{ otel_batch_size | default(512) }}
+
+exporters:
+  # OTLP exporter to send data to your LGTM stack
+  otlp:
+    endpoint: "{{ otel_endpoint }}"
+    tls:
+      insecure: {{ otel_insecure_connection | default(true) | bool }}
+      {% if otel_ca_file is defined %}
+      ca_file: "{{ otel_ca_file }}"
+      {% endif %}
+      {% if otel_cert_file is defined and otel_key_file is defined %}
+      cert_file: "{{ otel_cert_file }}"
+      key_file: "{{ otel_key_file }}"
+      {% endif %}
+
+  # Debug exporter (optional, prints telemetry to collector logs)
+  debug:
+    verbosity: {{ debug_verbosity | default('basic') }}
+
+extensions:
+  # Health check extension for monitoring collector status
+  health_check:
+    endpoint: "{{ health_check_endpoint | default('127.0.0.1:13133') }}"
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [prometheus, otlp]
+      processors: [memory_limiter, attributes, batch]
+      exporters: [otlp{% if enable_debug | default(true) %}, debug{% endif %}]
+    traces:
+      receivers: [otlp]
+      processors: [attributes, batch]
+      exporters: [otlp{% if enable_debug | default(true) %}, debug{% endif %}]
+    logs:
+      receivers: [otlp]
+      processors: [attributes, batch]
+      exporters: [otlp{% if enable_debug | default(true) %}, debug{% endif %}]
+
+  # Collector's own telemetry settings
+  telemetry:
+    logs:
+      level: {{ log_level | default('info') }}
+    metrics:
+      level: {{ metrics_level | default('basic') }}
+      address: "{{ telemetry_address | default('127.0.0.1:8888') }}"

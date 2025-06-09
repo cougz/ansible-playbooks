@@ -1,0 +1,28 @@
+---
+- name: Configure Proxmox OpenTelemetry and Metrics
+  hosts: proxmox
+  gather_facts: yes
+  
+  vars:
+    component_selection: "{{ component_selection | default('all') }}" 
+  
+  pre_tasks:
+    - name: Set derived component flags
+      set_fact:
+        include_otel: "{{ component_selection in ['all', 'otel'] }}"
+        include_metrics: "{{ component_selection in ['all', 'metrics'] }}"
+  
+  roles:
+    - role: otel-collector
+      when: include_otel | bool
+      vars:
+        install_collector: false
+        configure_collector: true
+        update_existing: false
+    
+    - role: metrics-exporter
+      when: include_metrics | bool
+      vars:
+        install_exporter: false
+        configure_exporter: true
+        update_existing: false

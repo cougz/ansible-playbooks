@@ -1,0 +1,12 @@
+---
+# Configuration tasks for Proxmox metrics exporter
+
+- name: Create Proxmox metrics exporter systemd service
+  ansible.builtin.template:
+    src: "metrics-exporter.service.j2"
+    dest: "/etc/systemd/system/{{ metrics_exporter_service_name }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+  become: yes

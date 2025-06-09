@@ -1,13 +1,9 @@
 ---
-# Handlers for Proxmox metrics exporter
+# Handlers for metrics exporter
 
-- name: reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: yes
-  become: yes
-
-- name: restart metrics_exporter
-  ansible.builtin.systemd:
-    name: "{{ metrics_exporter_service_name }}"
+- name: restart metrics exporter
+  systemd:
+    name: metrics-exporter
     state: restarted
-  become: yes
+    daemon_reload: yes
+  become: true

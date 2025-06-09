@@ -5,19 +5,25 @@
   
   vars:
     # Default values for Semaphore extra vars
-    component_selection: "all" # Options: "all", "otel", "metrics"
-    perform_install: true
-    perform_configure: true
-    perform_update: false
+    action_type: "install"  # Options: "install", "update", "uninstall"
+    component_selection: "all"  # Options: "all", "otel", "metrics"
   
   pre_tasks:
     - name: Display execution plan
       debug:
         msg: |
+          Action: {{ action_type }}
           Components: {{ component_selection }}
-          Will install: {{ perform_install }}
-          Will configure: {{ perform_configure }}
-          Update mode: {{ perform_update }}
+          Will install: {{ action_type == 'install' }}
+          Will configure: {{ action_type in ['install', 'update'] }}
+          Will uninstall: {{ action_type == 'uninstall' }}
+  
+    - name: Set derived action flags
+      set_fact:
+        perform_install: "{{ action_type == 'install' }}"
+        perform_configure: "{{ action_type in ['install', 'update'] }}"
+        perform_uninstall: "{{ action_type == 'uninstall' }}"
+        update_existing: "{{ action_type == 'update' }}"
   
     - name: Set derived component flags
       set_fact:
@@ -28,15 +34,15 @@
     - role: ../roles/common
     
     - role: ../roles/otel-collector
-      when: include_otel | bool
+      when: include_otel | bool and not perform_uninstall | bool
       vars:
         install_collector: "{{ perform_install }}"
         configure_collector: "{{ perform_configure }}"
-        update_existing: "{{ perform_update }}"
+        update_existing: "{{ update_existing }}"
     
     - role: ../roles/metrics-exporter
-      when: include_metrics | bool
+      when: include_metrics | bool and not perform_uninstall | bool
       vars:
         install_exporter: "{{ perform_install }}"
         configure_exporter: "{{ perform_configure }}"
-        update_existing: "{{ perform_update }}"
+        update_existing: "{{ update_existing }}"

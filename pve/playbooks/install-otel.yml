@@ -1,6 +1,6 @@
 ---
 - name: OpenTelemetry Collector Management
-  hosts: proxmox
+  hosts: "{{ target_hosts | default('proxmox') }}"
   gather_facts: yes
   
   vars:

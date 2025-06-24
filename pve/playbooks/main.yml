@@ -1,6 +1,6 @@
 ---
 - name: Proxmox OpenTelemetry and Metrics Management
-  hosts: hosts: "{{ target_hosts | default('proxmox') }}"
+  hosts: "{{ target_hosts | default('proxmox') }}"
   gather_facts: yes
   
   vars:

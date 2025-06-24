@@ -13,7 +13,7 @@ metrics_exporter_service_filename: "pve-metrics-exporter.service"
 
 metrics_script_path: "{{ metrics_home }}/{{ metrics_script_filename }}"
 metrics_exporter_app_path: "{{ metrics_home }}/{{ metrics_exporter_app_filename }}"
-metrics_exporter_service_name: "{{ metrics_exporter_service_filename }}"
+metrics_exporter_service_name: "metrics-exporter"
 
 # Metrics collection settings
 metrics_collection_interval: 30  # seconds

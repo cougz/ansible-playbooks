@@ -11,6 +11,13 @@
       Metrics Collection Interval: {{ metrics_collection_interval }}s
       ===============================================
 
+- name: Install nvme-cli for NVMe SMART monitoring
+  apt:
+    name: nvme-cli
+    state: present
+    update_cache: yes
+  become: yes
+
 - name: Copy Proxmox metrics script
   ansible.builtin.template:
     src: "host-metrics-script.sh.j2"

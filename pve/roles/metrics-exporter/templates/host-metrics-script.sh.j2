@@ -135,7 +135,7 @@ extract_temp() {
     echo "# Generated at $(date -Iseconds)"
 
     debug_log "Collecting NVMe SMART Temperature Metrics..."
-    # === NVMe SMART Temperature Metrics (only) ===
+    # === NVMe SMART Temperature Metrics (modified to only use Sensor 1 and Sensor 2) ===
     if command -v nvme >/dev/null 2>&1; then
         debug_log "nvme command found."
         # Check for NVMe devices directly
@@ -169,21 +169,19 @@ extract_temp() {
                         debug_log "Identified $device_name - Model: '$model', Serial: '$serial', Firmware: '$firmware'"
                     fi
 
-                    # Extract ONLY temperature values from nvme smart-log output
-                    temperature=$(echo "$smart_output" | grep -E '^\s*temperature\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
-                    temp_sensor_1=$(echo "$smart_output" | grep -E '^\s*Temperature Sensor 1\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
-                    temp_sensor_2=$(echo "$smart_output" | grep -E '^\s*Temperature Sensor 2\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
+                    # Extract NVMe temperature sensor values (Sensor 1 and Sensor 2 only)
+                    temp_sensor_1=$(echo "$smart_output" | grep -E '^Temperature Sensor 1\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
+                    temp_sensor_2=$(echo "$smart_output" | grep -E '^Temperature Sensor 2\s*:' | awk -F':' '{print $2}' | awk '{print $1}' | sed 's/°C.*//')
 
-                    # Output ONLY NVMe temperature metrics with device labels
+                    debug_log "Extracted NVMe temperatures - Sensor1: '$temp_sensor_1', Sensor2: '$temp_sensor_2'"
+
+                    # Output NVMe temperature sensor metrics
                     labels="device=\"$device_name\",model=\"$model\",serial=\"$serial\",firmware=\"$firmware\""
 
-                    if [ -n "$temperature" ]; then
-                        output_metric "pve_nvme_temperature_celsius" "gauge" "$temperature" "$labels"
-                    fi
-                    if [ -n "$temp_sensor_1" ]; then
+                    if [ -n "$temp_sensor_1" ] && [ "$temp_sensor_1" != "0" ]; then
                         output_metric "pve_nvme_temperature_sensor1_celsius" "gauge" "$temp_sensor_1" "$labels"
                     fi
-                    if [ -n "$temp_sensor_2" ]; then
+                    if [ -n "$temp_sensor_2" ] && [ "$temp_sensor_2" != "0" ]; then
                         output_metric "pve_nvme_temperature_sensor2_celsius" "gauge" "$temp_sensor_2" "$labels"
                     fi
 

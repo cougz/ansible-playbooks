@@ -42,6 +42,7 @@
       - lsb-release
       - gnupg
       - ca-certificates
+      - lm-sensors
     state: present
     update_cache: yes
   become: true

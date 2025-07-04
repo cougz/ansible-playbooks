@@ -1,0 +1,277 @@
+---
+- name: Uninstall LXC OpenTelemetry and Metrics Components
+  hosts: lxc
+  gather_facts: yes
+  
+  vars:
+    # Default values for Semaphore extra vars
+    component_selection: "all"  # Options: "all", "otel", "metrics"
+    force_removal: false  # Set to true to remove user/group even if other processes use them
+  
+  pre_tasks:
+    - name: Display uninstall plan
+      debug:
+        msg: |
+          ==========================================
+          LXC Uninstall Operation
+          ==========================================
+          Components to remove: {{ component_selection }}
+          Force user/group removal: {{ force_removal }}
+          Target host: {{ inventory_hostname }}
+          ==========================================
+    
+    - name: Set component flags
+      set_fact:
+        remove_otel: "{{ (component_selection == 'all') or (component_selection == 'otel') }}"
+        remove_metrics: "{{ (component_selection == 'all') or (component_selection == 'metrics') }}"
+  
+  tasks:
+    # ===================
+    # OpenTelemetry Collector Removal
+    # ===================
+    
+    - name: Stop OpenTelemetry Collector service
+      ansible.builtin.systemd:
+        name: otelcol-contrib
+        state: stopped
+        enabled: no
+      become: yes
+      ignore_errors: yes
+      when: remove_otel | bool
+      
+    - name: Remove OpenTelemetry Collector systemd service file
+      ansible.builtin.file:
+        path: /etc/systemd/system/otelcol-contrib.service
+        state: absent
+      become: yes
+      when: remove_otel | bool
+    
+    - name: Remove OpenTelemetry Collector configuration directory
+      ansible.builtin.file:
+        path: /etc/otelcol-contrib
+        state: absent
+      become: yes
+      when: remove_otel | bool
+    
+    - name: Remove OpenTelemetry Collector installation directory
+      ansible.builtin.file:
+        path: /opt/otelcol-contrib
+        state: absent
+      become: yes
+      when: remove_otel | bool
+    
+    - name: Remove OpenTelemetry Collector log directory
+      ansible.builtin.file:
+        path: /var/log/otelcol-contrib
+        state: absent
+      become: yes
+      when: remove_otel | bool
+    
+    - name: Remove OpenTelemetry Collector data directory
+      ansible.builtin.file:
+        path: /var/lib/otelcol-contrib
+        state: absent
+      become: yes
+      when: remove_otel | bool
+    
+    # ===================
+    # Metrics Exporter Removal
+    # ===================
+    
+    - name: Stop LXC Metrics Exporter service
+      ansible.builtin.systemd:
+        name: lxc-metrics-exporter
+        state: stopped
+        enabled: no
+      become: yes
+      ignore_errors: yes
+      when: remove_metrics | bool
+      
+    - name: Remove LXC Metrics Exporter systemd service file
+      ansible.builtin.file:
+        path: /etc/systemd/system/lxc-metrics-exporter.service
+        state: absent
+      become: yes
+      when: remove_metrics | bool
+    
+    - name: Remove LXC Metrics installation directory
+      ansible.builtin.file:
+        path: /opt/lxc-metrics
+        state: absent
+      become: yes
+      when: remove_metrics | bool
+    
+    # ===================
+    # Cleanup Tasks
+    # ===================
+    
+    - name: Reload systemd daemon after service removal
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      become: yes
+      when: remove_otel | bool or remove_metrics | bool
+    
+    - name: Check if otelcol user has running processes
+      ansible.builtin.shell: |
+        ps -u otelcol -o pid= 2>/dev/null | wc -l
+      register: otelcol_processes
+      become: yes
+      ignore_errors: yes
+      when: force_removal | bool
+    
+    - name: Remove otelcol user (when force_removal is true)
+      ansible.builtin.user:
+        name: otelcol
+        state: absent
+        remove: yes
+        force: yes
+      become: yes
+      when: 
+        - force_removal | bool
+        - (otelcol_processes.stdout | default('0') | int) == 0
+      ignore_errors: yes
+    
+    - name: Remove otelcol group (when force_removal is true)
+      ansible.builtin.group:
+        name: otelcol
+        state: absent
+      become: yes
+      when: force_removal | bool
+      ignore_errors: yes
+    
+    - name: Clean up any remaining temp files
+      ansible.builtin.find:
+        paths:
+          - /tmp
+          - /var/tmp
+        patterns:
+          - "otelcol*"
+          - "lxc-metrics*"
+          - "*otel*"
+        file_type: file
+        age: "1d"
+      register: temp_files
+      become: yes
+    
+    - name: Remove temp files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      become: yes
+      loop: "{{ temp_files.files }}"
+      ignore_errors: yes
+    
+    # ===================
+    # Verification Tasks
+    # ===================
+    
+    - name: Verify OpenTelemetry Collector service removal
+      ansible.builtin.systemd:
+        name: otelcol-contrib
+      register: otel_service_check
+      become: yes
+      ignore_errors: yes
+      when: remove_otel | bool
+    
+    - name: Verify Metrics Exporter service removal
+      ansible.builtin.systemd:
+        name: lxc-metrics-exporter
+      register: metrics_service_check
+      become: yes
+      ignore_errors: yes
+      when: remove_metrics | bool
+    
+    - name: Check for any remaining otel processes
+      ansible.builtin.shell: |
+        ps aux | grep -E "(otelcol|lxc-metrics)" | grep -v grep || echo "No processes found"
+      register: remaining_processes
+      become: yes
+      ignore_errors: yes
+    
+    - name: Check for any remaining otel ports
+      ansible.builtin.shell: |
+        netstat -tulpn 2>/dev/null | grep -E "(4317|4318|8888|9100|13133)" || echo "No ports in use"
+      register: remaining_ports
+      become: yes
+      ignore_errors: yes
+    
+    # ===================
+    # Summary Report
+    # ===================
+    
+    - name: Display uninstall summary
+      debug:
+        msg: |
+          ==========================================
+          Uninstall Summary for {{ inventory_hostname }}
+          ==========================================
+          
+          Components Removed:
+          {% if remove_otel %}
+          ✓ OpenTelemetry Collector
+            - Service: otelcol-contrib
+            - Config: /etc/otelcol-contrib/
+            - Install: /opt/otelcol-contrib/
+            - Logs: /var/log/otelcol-contrib/
+            - Data: /var/lib/otelcol-contrib/
+          {% endif %}
+          {% if remove_metrics %}
+          ✓ LXC Metrics Exporter
+            - Service: lxc-metrics-exporter
+            - Install: /opt/lxc-metrics/
+          {% endif %}
+          
+          Cleanup Status:
+          - Systemd services: Stopped and disabled
+          - Service files: Removed
+          - Installation directories: Removed
+          - Configuration files: Removed
+          - Log files: Removed
+          - Temp files: Cleaned up
+          
+          {% if force_removal %}
+          User/Group Removal:
+          - otelcol user: {{ 'Removed' if (otelcol_processes.stdout | default('0') | int) == 0 else 'Skipped (processes running)' }}
+          - otelcol group: Attempted removal
+          {% else %}
+          User/Group Status:
+          - otelcol user/group: Preserved (set force_removal=true to remove)
+          {% endif %}
+          
+          Verification:
+          - Remaining processes: {{ remaining_processes.stdout | default('None') }}
+          - Ports still in use: {{ remaining_ports.stdout | default('None') }}
+          
+          ==========================================
+          Uninstall completed successfully!
+          ==========================================
+
+  post_tasks:
+    - name: Final cleanup verification
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: cleanup_verification
+      loop:
+        - /etc/systemd/system/otelcol-contrib.service
+        - /etc/systemd/system/lxc-metrics-exporter.service
+        - /etc/otelcol-contrib
+        - /opt/otelcol-contrib
+        - /opt/lxc-metrics
+        - /var/log/otelcol-contrib
+        - /var/lib/otelcol-contrib
+      become: yes
+    
+    - name: Report any remaining files
+      debug:
+        msg: "WARNING: {{ item.item }} still exists and was not removed"
+      loop: "{{ cleanup_verification.results }}"
+      when: item.stat.exists | default(false)
+      
+    - name: Confirm successful cleanup
+      debug:
+        msg: |
+          🎉 Uninstall operation completed successfully!
+          
+          All specified components have been removed from {{ inventory_hostname }}.
+          The system is now clean and ready for fresh installation if needed.
+      when: cleanup_verification.results | selectattr('stat.exists', 'equalto', true) | list | length == 0

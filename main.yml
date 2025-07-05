@@ -1,0 +1,178 @@
+---
+- name: Platform-Agnostic Metrics Management
+  hosts: "{{ target_hosts | default('all') }}"
+  gather_facts: yes
+  
+  vars:
+    # Survey Variables
+    action_type: "install"  # Options: "install", "update", "uninstall"
+    component_selection: "metrics-exporter"  # Options: "metrics-exporter" (more can be added later)
+    target_hosts: "all"  # Can be set to specific hosts, groups, or patterns
+    force_removal: false  # Only used for uninstall - removes user/group
+  
+  pre_tasks:
+    - name: Display execution plan
+      debug:
+        msg: |
+          ==========================================
+          Metrics Management Operation
+          ==========================================
+          Action: {{ action_type }}
+          Component: {{ component_selection }}
+          Target Hosts: {{ target_hosts }}
+          Current Host: {{ inventory_hostname }}
+          Platform: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          {% if action_type == 'uninstall' %}
+          Force user/group removal: {{ force_removal }}
+          {% endif %}
+          ==========================================
+  
+    - name: Set derived action flags
+      set_fact:
+        perform_install: "{{ action_type == 'install' }}"
+        perform_configure: "{{ action_type in ['install', 'update'] }}"
+        perform_uninstall: "{{ action_type == 'uninstall' }}"
+        update_existing: "{{ action_type == 'update' }}"
+
+  tasks:
+    # ===================
+    # UNINSTALL TASKS
+    # ===================
+    
+    - name: "UNINSTALL: Stop Metrics Exporter service"
+      ansible.builtin.systemd:
+        name: metrics-exporter
+        state: stopped
+        enabled: no
+      become: yes
+      ignore_errors: yes
+      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+      
+    - name: "UNINSTALL: Remove Metrics Exporter systemd service file"
+      ansible.builtin.file:
+        path: /etc/systemd/system/metrics-exporter.service
+        state: absent
+      become: yes
+      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+    
+    - name: "UNINSTALL: Remove Metrics Exporter installation directory"
+      ansible.builtin.file:
+        path: /opt/metrics-exporters
+        state: absent
+      become: yes
+      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+    
+    - name: "UNINSTALL: Reload systemd daemon after service removal"
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      become: yes
+      when: perform_uninstall | bool
+    
+    - name: "UNINSTALL: Check if otelcol user has running processes"
+      ansible.builtin.shell: |
+        ps -u otelcol -o pid= 2>/dev/null | wc -l
+      register: otelcol_processes
+      become: yes
+      ignore_errors: yes
+      when: perform_uninstall | bool and force_removal | bool
+    
+    - name: "UNINSTALL: Remove otelcol user (when force_removal is true)"
+      ansible.builtin.user:
+        name: otelcol
+        state: absent
+        remove: yes
+        force: yes
+      become: yes
+      when: 
+        - perform_uninstall | bool
+        - force_removal | bool
+        - (otelcol_processes.stdout | default('0') | int) == 0
+      ignore_errors: yes
+    
+    - name: "UNINSTALL: Remove otelcol group (when force_removal is true)"
+      ansible.builtin.group:
+        name: otelcol
+        state: absent
+      become: yes
+      when: 
+        - perform_uninstall | bool
+        - force_removal | bool
+      ignore_errors: yes
+    
+    - name: "UNINSTALL: Clean up any remaining temp files"
+      ansible.builtin.find:
+        paths:
+          - /tmp
+          - /var/tmp
+        patterns:
+          - "metrics-exporter*"
+        file_type: file
+        age: "1d"
+      register: temp_files
+      become: yes
+      when: perform_uninstall | bool
+    
+    - name: "UNINSTALL: Remove temp files"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      become: yes
+      loop: "{{ temp_files.files | default([]) }}"
+      ignore_errors: yes
+      when: perform_uninstall | bool
+    
+    - name: "UNINSTALL: Display uninstall summary"
+      debug:
+        msg: |
+          ==========================================
+          Uninstall Summary for {{ inventory_hostname }}
+          ==========================================
+          
+          Component Removed: Metrics Exporter (FastAPI)
+          - Service: metrics-exporter
+          - Install: /opt/metrics-exporters/
+          
+          {% if force_removal %}
+          User/Group Removal:
+          - otelcol user: {{ 'Removed' if (otelcol_processes.stdout | default('0') | int) == 0 else 'Skipped (processes running)' }}
+          - otelcol group: Attempted removal
+          {% else %}
+          User/Group Status:
+          - otelcol user/group: Preserved (set force_removal=true to remove)
+          {% endif %}
+          
+          ==========================================
+      when: perform_uninstall | bool
+
+  roles:
+    # Common setup tasks (only run when NOT uninstalling)
+    - role: roles/common
+      when: not perform_uninstall | bool and component_selection == 'metrics-exporter'
+    
+    # Install/Update roles
+    - role: roles/fastapi-metrics-exporter
+      when: component_selection == 'metrics-exporter' and not perform_uninstall | bool
+      vars:
+        install_exporter: "{{ perform_install }}"
+        configure_exporter: "{{ perform_configure }}"
+        update_existing: "{{ update_existing }}"
+
+  post_tasks:
+    - name: Final status message for install/update operations
+      debug:
+        msg: |
+          ==========================================
+          {{ action_type | title }} operation completed successfully!
+          ==========================================
+          Component: {{ component_selection }}
+          Host: {{ inventory_hostname }}
+          Platform: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          
+          {% if action_type in ['install', 'update'] and component_selection == 'metrics-exporter' %}
+          Metrics Exporter (FastAPI):
+          - Status: Running
+          - Service: metrics-exporter
+          - OTLP Endpoint: Configured
+          {% endif %}
+          ==========================================
+      when: not perform_uninstall | bool

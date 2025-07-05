@@ -1,0 +1,50 @@
+---
+# Common tasks for all platforms
+
+- name: Ensure otelcol group exists
+  group:
+    name: otelcol
+    state: present
+  become: yes
+
+- name: Ensure otelcol user exists
+  user:
+    name: otelcol
+    group: otelcol
+    home: /var/lib/otelcol
+    shell: /bin/false
+    system: yes
+    createhome: yes
+  become: yes
+
+- name: Ensure Python and required packages are installed (Debian/Ubuntu)
+  package:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - git
+    state: present
+  become: yes
+  when: ansible_os_family == "Debian"
+
+- name: Ensure Python and required packages are installed (RedHat/CentOS)
+  package:
+    name:
+      - python3
+      - python3-pip
+      - git
+    state: present
+  become: yes
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure Python and required packages are installed (Alpine)
+  package:
+    name:
+      - python3
+      - py3-pip
+      - py3-virtualenv
+      - git
+    state: present
+  become: yes
+  when: ansible_os_family == "Alpine"

@@ -25,14 +25,12 @@
     version: "{{ metrics_exporter_version }}"
     force: yes
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
 
 - name: Create Python virtual environment
   command: "{{ metrics_exporter_python_version }} -m venv {{ metrics_exporter_install_dir }}/venv"
   args:
     creates: "{{ metrics_exporter_install_dir }}/venv"
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
 
 - name: Upgrade pip in virtual environment
   pip:
@@ -40,11 +38,18 @@
     state: latest
     virtualenv: "{{ metrics_exporter_install_dir }}/venv"
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
 
 - name: Install Python requirements
   pip:
     requirements: "{{ metrics_exporter_install_dir }}/requirements.txt"
     virtualenv: "{{ metrics_exporter_install_dir }}/venv"
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
+
+- name: Set ownership of metrics exporter directory
+  file:
+    path: "{{ metrics_exporter_install_dir }}"
+    state: directory
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    recurse: yes
+  become: yes

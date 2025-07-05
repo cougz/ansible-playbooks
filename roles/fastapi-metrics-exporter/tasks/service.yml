@@ -1,4 +1,14 @@
 ---
+- name: Verify service file exists
+  stat:
+    path: "/etc/systemd/system/{{ metrics_exporter_service_name }}.service"
+  register: service_file
+  become: yes
+
+- name: Display service file status
+  debug:
+    msg: "Service file exists: {{ service_file.stat.exists }}"
+
 - name: Reload systemd daemon
   systemd:
     daemon_reload: yes
@@ -9,6 +19,7 @@
     name: "{{ metrics_exporter_service_name }}"
     enabled: yes
     state: started
+    daemon_reload: yes
   become: yes
 
 - name: Wait for service to be ready

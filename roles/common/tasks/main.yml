@@ -7,6 +7,13 @@
     state: present
   become: yes
 
+- name: Check if otelcol user exists
+  getent:
+    database: passwd
+    key: otelcol
+  register: otelcol_user_check
+  ignore_errors: yes
+
 - name: Ensure otelcol user exists
   user:
     name: otelcol
@@ -16,6 +23,7 @@
     system: yes
     createhome: yes
   become: yes
+  when: otelcol_user_check.failed
 
 - name: Ensure Python and required packages are installed (Debian/Ubuntu)
   package:

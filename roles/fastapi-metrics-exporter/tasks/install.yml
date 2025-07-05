@@ -18,12 +18,33 @@
     mode: '0755'
   become: yes
 
-- name: Remove existing repository if it exists
-  file:
+- name: Configure git safe directory
+  command: git config --global --add safe.directory {{ metrics_exporter_install_dir }}
+  become: yes
+  changed_when: false
+
+- name: Check if repository exists
+  stat:
     path: "{{ metrics_exporter_install_dir }}/.git"
+  register: repo_exists
+  become: yes
+
+- name: Remove existing repository if update needed
+  file:
+    path: "{{ metrics_exporter_install_dir }}"
     state: absent
   become: yes
-  when: update_existing | default(false) | bool
+  when: repo_exists.stat.exists and (update_existing | default(false) | bool)
+
+- name: Re-create directory after removal
+  file:
+    path: "{{ metrics_exporter_install_dir }}"
+    state: directory
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    mode: '0755'
+  become: yes
+  when: repo_exists.stat.exists and (update_existing | default(false) | bool)
 
 - name: Clone metrics-exporters repository
   git:
@@ -31,7 +52,6 @@
     dest: "{{ metrics_exporter_install_dir }}"
     version: "{{ metrics_exporter_version }}"
     force: yes
-    update: yes
   become: yes
 
 - name: Create Python virtual environment

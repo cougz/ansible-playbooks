@@ -11,6 +11,16 @@
     force_removal: false  # Only used for uninstall - removes user/group
   
   pre_tasks:
+    - name: Clean up broken installations if needed
+      file:
+        path: /opt/metrics-exporters
+        state: absent
+      become: yes
+      when: 
+        - action_type == 'install'
+        - component_selection == 'metrics-exporter'
+      tags: cleanup
+
     - name: Display execution plan
       debug:
         msg: |

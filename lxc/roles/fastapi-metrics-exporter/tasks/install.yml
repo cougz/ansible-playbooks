@@ -1,0 +1,50 @@
+---
+- name: Install Python dependencies
+  package:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - git
+    state: present
+  become: yes
+
+- name: Create metrics exporter directory
+  file:
+    path: "{{ metrics_exporter_install_dir }}"
+    state: directory
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    mode: '0755'
+  become: yes
+
+- name: Clone metrics-exporters repository
+  git:
+    repo: "{{ metrics_exporter_repo }}"
+    dest: "{{ metrics_exporter_install_dir }}"
+    version: "{{ metrics_exporter_version }}"
+    force: yes
+  become: yes
+  become_user: "{{ metrics_exporter_user }}"
+
+- name: Create Python virtual environment
+  command: "{{ metrics_exporter_python_version }} -m venv {{ metrics_exporter_install_dir }}/venv"
+  args:
+    creates: "{{ metrics_exporter_install_dir }}/venv"
+  become: yes
+  become_user: "{{ metrics_exporter_user }}"
+
+- name: Upgrade pip in virtual environment
+  pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ metrics_exporter_install_dir }}/venv"
+  become: yes
+  become_user: "{{ metrics_exporter_user }}"
+
+- name: Install Python requirements
+  pip:
+    requirements: "{{ metrics_exporter_install_dir }}/requirements.txt"
+    virtualenv: "{{ metrics_exporter_install_dir }}/venv"
+  become: yes
+  become_user: "{{ metrics_exporter_user }}"

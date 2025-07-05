@@ -1,0 +1,31 @@
+[Unit]
+Description={{ metrics_exporter_service_description }}
+After=network.target
+
+[Service]
+Type=simple
+User={{ metrics_exporter_user }}
+Group={{ metrics_exporter_group }}
+WorkingDirectory={{ metrics_exporter_install_dir }}
+ExecStart={{ metrics_exporter_install_dir }}/venv/bin/python {{ metrics_exporter_install_dir }}/main.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONPATH={{ metrics_exporter_install_dir }}
+
+# OTLP Configuration (required)
+Environment=OTLP_ENDPOINT={{ otlp_endpoint }}
+Environment=SERVICE_NAME={{ service_name }}-{{ inventory_hostname }}
+Environment=SERVICE_VERSION={{ service_version }}
+Environment=OTLP_INSECURE={{ otlp_insecure }}
+
+# Optional settings
+Environment=COLLECTION_INTERVAL={{ collection_interval }}
+Environment=ENABLED_COLLECTORS_STR={{ enabled_collectors }}
+Environment=LOG_LEVEL={{ log_level }}
+
+# Resource limits
+LimitNOFILE=65536
+MemoryLimit=512M
+
+[Install]
+WantedBy=multi-user.target

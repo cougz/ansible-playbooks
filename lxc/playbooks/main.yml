@@ -6,7 +6,7 @@
   vars:
     # Default values for Semaphore extra vars
     action_type: "install"  # Options: "install", "update", "uninstall"
-    component_selection: "all"  # Options: "all", "otel", "metrics"
+    component_selection: "all"  # Options: "all", "otel", "metrics", "metrics-exporter"
     force_removal: false  # Only used for uninstall - removes user/group
   
   pre_tasks:
@@ -39,6 +39,7 @@
       set_fact:
         include_otel: "{{ (component_selection == 'all') or (component_selection == 'otel') }}"
         include_metrics: "{{ (component_selection == 'all') or (component_selection == 'metrics') }}"
+        include_metrics_exporter: "{{ (component_selection == 'all') or (component_selection == 'metrics-exporter') }}"
 
   tasks:
     # ===================
@@ -112,6 +113,29 @@
       become: yes
       when: perform_uninstall | bool and include_metrics | bool
     
+    - name: "UNINSTALL: Stop Metrics Exporter service"
+      ansible.builtin.systemd:
+        name: metrics-exporter
+        state: stopped
+        enabled: no
+      become: yes
+      ignore_errors: yes
+      when: perform_uninstall | bool and include_metrics_exporter | bool
+      
+    - name: "UNINSTALL: Remove Metrics Exporter systemd service file"
+      ansible.builtin.file:
+        path: /etc/systemd/system/metrics-exporter.service
+        state: absent
+      become: yes
+      when: perform_uninstall | bool and include_metrics_exporter | bool
+    
+    - name: "UNINSTALL: Remove Metrics Exporter installation directory"
+      ansible.builtin.file:
+        path: /opt/metrics-exporters
+        state: absent
+      become: yes
+      when: perform_uninstall | bool and include_metrics_exporter | bool
+    
     - name: "UNINSTALL: Reload systemd daemon after service removal"
       ansible.builtin.systemd:
         daemon_reload: yes
@@ -158,6 +182,7 @@
           - "otelcol*"
           - "lxc-metrics*"
           - "*otel*"
+          - "metrics-exporter*"
         file_type: file
         age: "1d"
       register: temp_files
@@ -202,6 +227,11 @@
             - Service: lxc-metrics-exporter
             - Install: /opt/lxc-metrics/
           {% endif %}
+          {% if include_metrics_exporter %}
+          ✓ Metrics Exporter (FastAPI)
+            - Service: metrics-exporter
+            - Install: /opt/metrics-exporters/
+          {% endif %}
           
           {% if force_removal %}
           User/Group Removal:
@@ -237,6 +267,13 @@
         install_exporter: "{{ perform_install }}"
         configure_exporter: "{{ perform_configure }}"
         update_existing: "{{ update_existing }}"
+    
+    - role: ../roles/fastapi-metrics-exporter
+      when: include_metrics_exporter | bool and not perform_uninstall | bool
+      vars:
+        install_exporter: "{{ perform_install }}"
+        configure_exporter: "{{ perform_configure }}"
+        update_existing: "{{ update_existing }}"
 
   post_tasks:
     - name: Final status message for install/update operations
@@ -261,6 +298,13 @@
           - Status: Running  
           - Metrics URL: http://{{ inventory_hostname }}:9100/metrics
           - Health Check: http://{{ inventory_hostname }}:9100/health
+          {% endif %}
+          {% if include_metrics_exporter %}
+          
+          Metrics Exporter (FastAPI):
+          - Status: Running
+          - Service: metrics-exporter
+          - OTLP Endpoint: Configured
           {% endif %}
           {% endif %}
           ==========================================

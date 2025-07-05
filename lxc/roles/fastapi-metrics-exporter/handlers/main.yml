@@ -1,0 +1,7 @@
+---
+- name: restart metrics-exporter
+  systemd:
+    name: "{{ metrics_exporter_service_name }}"
+    state: restarted
+    daemon_reload: yes
+  become: yes

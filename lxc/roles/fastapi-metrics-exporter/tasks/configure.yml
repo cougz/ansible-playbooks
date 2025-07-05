@@ -1,0 +1,19 @@
+---
+- name: Create systemd service file
+  template:
+    src: metrics-exporter.service.j2
+    dest: "/etc/systemd/system/{{ metrics_exporter_service_name }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  become: yes
+  notify: restart metrics-exporter
+
+- name: Set proper ownership of metrics exporter directory
+  file:
+    path: "{{ metrics_exporter_install_dir }}"
+    state: directory
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    recurse: yes
+  become: yes

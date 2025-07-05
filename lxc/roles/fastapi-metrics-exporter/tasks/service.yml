@@ -1,0 +1,33 @@
+---
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start metrics-exporter service
+  systemd:
+    name: "{{ metrics_exporter_service_name }}"
+    enabled: yes
+    state: started
+  become: yes
+
+- name: Wait for service to be ready
+  wait_for:
+    port: 8000
+    host: "{{ ansible_default_ipv4.address }}"
+    delay: 5
+    timeout: 30
+  ignore_errors: yes
+
+- name: Check service status
+  systemd:
+    name: "{{ metrics_exporter_service_name }}"
+  register: service_status
+  become: yes
+
+- name: Display service status
+  debug:
+    msg: |
+      Service Name: {{ metrics_exporter_service_name }}
+      Active State: {{ service_status.status.ActiveState }}
+      Sub State: {{ service_status.status.SubState }}

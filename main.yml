@@ -4,21 +4,42 @@
   gather_facts: yes
   
   vars:
-    # Survey Variables
-    action_type: "install"  # Options: "install", "update", "uninstall"
-    component_selection: "metrics-exporter"  # Options: "metrics-exporter" (more can be added later)
-    target_hosts: "all"  # Can be set to specific hosts, groups, or patterns
-    force_removal: false  # Only used for uninstall - removes user/group
+    # Survey Variables - Enhanced with reinstall action
+    action_type: "{{ action_type | default('install') }}"  
+    # Action types:
+    # - install: Fresh installation
+    # - update: Update config and fix broken dependencies automatically
+    # - reinstall: Force complete rebuild of everything
+    # - uninstall: Remove everything
+    component_selection: "{{ component_selection | default('metrics-exporter') }}"
+    target_hosts: "{{ target_hosts | default('all') }}"
+    force_removal: "{{ force_removal | default(false) }}"
+    
+    # Derived component flags
+    install_metrics_exporter: "{{ component_selection in ['metrics-exporter', 'all'] }}"
   
   pre_tasks:
+    - name: Debug survey variables
+      debug:
+        msg: |
+          ==========================================
+          Survey Variables Debug
+          ==========================================
+          action_type: "{{ action_type }}"
+          component_selection: "{{ component_selection }}" 
+          target_hosts: "{{ target_hosts }}"
+          force_removal: "{{ force_removal }}"
+          install_metrics_exporter: "{{ install_metrics_exporter }}"
+          ==========================================
+          
     - name: Clean up broken installations if needed
       file:
         path: /opt/metrics-exporters
         state: absent
       become: yes
       when: 
-        - action_type == 'install'
-        - component_selection == 'metrics-exporter'
+        - action_type == 'reinstall'
+        - install_metrics_exporter | bool
       tags: cleanup
 
     - name: Display execution plan
@@ -40,9 +61,24 @@
     - name: Set derived action flags
       set_fact:
         perform_install: "{{ action_type == 'install' }}"
-        perform_configure: "{{ action_type in ['install', 'update'] }}"
+        perform_configure: "{{ action_type in ['install', 'update', 'reinstall'] }}"
         perform_uninstall: "{{ action_type == 'uninstall' }}"
+        perform_reinstall: "{{ action_type == 'reinstall' }}"
         update_existing: "{{ action_type == 'update' }}"
+        
+    - name: Debug derived flags
+      debug:
+        msg: |
+          ==========================================
+          Derived Action Flags
+          ==========================================
+          perform_install: {{ perform_install }}
+          perform_configure: {{ perform_configure }}
+          perform_uninstall: {{ perform_uninstall }}
+          perform_reinstall: {{ perform_reinstall }}
+          update_existing: {{ update_existing }}
+          install_metrics_exporter: {{ install_metrics_exporter }}
+          ==========================================
 
   tasks:
     # ===================
@@ -56,21 +92,21 @@
         enabled: no
       become: yes
       ignore_errors: yes
-      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+      when: perform_uninstall | bool and install_metrics_exporter | bool
       
     - name: "UNINSTALL: Remove Metrics Exporter systemd service file"
       ansible.builtin.file:
         path: /etc/systemd/system/metrics-exporter.service
         state: absent
       become: yes
-      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+      when: perform_uninstall | bool and install_metrics_exporter | bool
     
     - name: "UNINSTALL: Remove Metrics Exporter installation directory"
       ansible.builtin.file:
         path: /opt/metrics-exporters
         state: absent
       become: yes
-      when: perform_uninstall | bool and component_selection == 'metrics-exporter'
+      when: perform_uninstall | bool and install_metrics_exporter | bool
     
     - name: "UNINSTALL: Reload systemd daemon after service removal"
       ansible.builtin.systemd:
@@ -157,15 +193,16 @@
   roles:
     # Common setup tasks (only run when NOT uninstalling)
     - role: roles/common
-      when: not perform_uninstall | bool and component_selection == 'metrics-exporter'
+      when: not perform_uninstall | bool and install_metrics_exporter | bool
     
-    # Install/Update roles
+    # Install/Update roles with enhanced flags
     - role: roles/fastapi-metrics-exporter
-      when: component_selection == 'metrics-exporter' and not perform_uninstall | bool
+      when: install_metrics_exporter | bool and not perform_uninstall | bool
       vars:
         install_exporter: "{{ perform_install }}"
         configure_exporter: "{{ perform_configure }}"
         update_existing: "{{ update_existing }}"
+        force_reinstall: "{{ perform_reinstall }}"
 
   post_tasks:
     - name: Final status message for install/update operations
@@ -178,7 +215,7 @@
           Host: {{ inventory_hostname }}
           Platform: {{ ansible_distribution }} {{ ansible_distribution_version }}
           
-          {% if action_type in ['install', 'update'] and component_selection == 'metrics-exporter' %}
+          {% if action_type in ['install', 'update', 'reinstall'] and install_metrics_exporter | bool %}
           Metrics Exporter (FastAPI):
           - Status: Running
           - Service: metrics-exporter

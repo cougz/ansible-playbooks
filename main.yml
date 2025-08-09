@@ -13,10 +13,10 @@
           ==========================================
           Survey Variables Debug
           ==========================================
-          action_type: "{{ action_type }}"
-          component_selection: "{{ component_selection }}" 
-          target_hosts: "{{ target_hosts }}"
-          force_removal: "{{ force_removal }}"
+          action_type: "{{ action_type | default('undefined') }}"
+          component_selection: "{{ component_selection | default('undefined') }}" 
+          target_hosts: "{{ target_hosts | default('undefined') }}"
+          force_removal: "{{ force_removal | default('undefined') }}"
           install_metrics_exporter: "{{ install_metrics_exporter }}"
           ==========================================
           

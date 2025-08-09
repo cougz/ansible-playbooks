@@ -1,7 +1,81 @@
 ---
+# Enhanced role that automatically detects and fixes broken dependencies
+
+- name: Check if metrics exporter application exists
+  stat:
+    path: /opt/metrics-exporters/main.py
+  register: app_exists
+
+- name: Check if virtual environment exists
+  stat:
+    path: /opt/metrics-exporters/venv/bin/python
+  register: venv_exists
+
+- name: Check if requirements.txt exists
+  stat:
+    path: /opt/metrics-exporters/requirements.txt
+  register: requirements_exists
+
+- name: Test virtual environment functionality
+  block:
+    - name: Test if critical dependencies are importable
+      command: /opt/metrics-exporters/venv/bin/python -c "import uvicorn, fastapi, opentelemetry"
+      register: venv_functional_test
+      failed_when: false
+      changed_when: false
+      become: yes
+      become_user: otelcol
+  when: venv_exists.stat.exists
+
+- name: Set installation decision flags
+  set_fact:
+    app_missing: "{{ not app_exists.stat.exists }}"
+    venv_missing: "{{ not venv_exists.stat.exists }}"
+    venv_broken: "{{ venv_exists.stat.exists and (venv_functional_test.rc | default(1)) != 0 }}"
+    requirements_missing: "{{ not requirements_exists.stat.exists }}"
+    need_full_install: "{{ not app_exists.stat.exists or not requirements_exists.stat.exists }}"
+    need_venv_rebuild: "{{ not venv_exists.stat.exists or (venv_exists.stat.exists and (venv_functional_test.rc | default(1)) != 0) }}"
+    run_install_tasks: "{{ install_exporter | bool or force_reinstall | bool or not app_exists.stat.exists or not venv_exists.stat.exists or (venv_exists.stat.exists and (venv_functional_test.rc | default(1)) != 0) }}"
+
+- name: Display comprehensive installation analysis
+  debug:
+    msg: |
+      ==========================================
+      Installation Analysis for {{ inventory_hostname }}
+      ==========================================
+      Current State:
+      - App exists: {{ app_exists.stat.exists }}
+      - Venv exists: {{ venv_exists.stat.exists }}
+      - Requirements.txt exists: {{ requirements_exists.stat.exists }}
+      {% if venv_exists.stat.exists %}
+      - Venv functional: {{ (venv_functional_test.rc | default(1)) == 0 }}
+      {% if (venv_functional_test.rc | default(1)) != 0 %}
+      - Venv error: Dependencies missing or broken
+      {% endif %}
+      {% endif %}
+      
+      Action Analysis:
+      - Action type: {{ action_type | default('unknown') }}
+      - Force reinstall: {{ force_reinstall | default(false) }}
+      - Need full install: {{ need_full_install }}
+      - Need venv rebuild: {{ need_venv_rebuild }}
+      
+      Decision:
+      - Will run install tasks: {{ run_install_tasks }}
+      - Will run configure tasks: {{ configure_exporter | bool }}
+      ==========================================
+
+- name: Stop service before major changes
+  systemd:
+    name: metrics-exporter
+    state: stopped
+  become: yes
+  ignore_errors: yes
+  when: run_install_tasks | bool
+
 - name: Include install tasks
   include_tasks: install.yml
-  when: install_exporter | bool
+  when: run_install_tasks | bool
 
 - name: Include configure tasks
   include_tasks: configure.yml

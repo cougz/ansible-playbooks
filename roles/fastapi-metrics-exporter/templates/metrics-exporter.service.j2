@@ -13,7 +13,7 @@ RestartSec=5
 Environment=PYTHONPATH={{ metrics_exporter_install_dir }}
 
 # OTLP Configuration (required)
-Environment=OTLP_ENDPOINT={{ otlp_endpoint }}
+Environment="OTLP_ENDPOINT={{ otlp_endpoint }}"
 Environment=SERVICE_NAME={{ service_name }}-{{ inventory_hostname }}
 Environment=SERVICE_VERSION={{ service_version }}
 Environment=OTLP_INSECURE={{ otlp_insecure }}

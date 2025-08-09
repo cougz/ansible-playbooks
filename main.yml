@@ -4,19 +4,7 @@
   gather_facts: yes
   
   vars:
-    # Survey Variables - Enhanced with reinstall action
-    action_type: "{{ action_type | default('install') }}"  
-    # Action types:
-    # - install: Fresh installation
-    # - update: Update config and fix broken dependencies automatically
-    # - reinstall: Force complete rebuild of everything
-    # - uninstall: Remove everything
-    component_selection: "{{ component_selection | default('metrics-exporter') }}"
-    target_hosts: "{{ target_hosts | default('all') }}"
-    force_removal: "{{ force_removal | default(false) }}"
-    
-    # Derived component flags
-    install_metrics_exporter: "{{ component_selection in ['metrics-exporter', 'all'] }}"
+    install_metrics_exporter: "{{ component_selection | default('metrics-exporter') in ['metrics-exporter', 'all'] }}"
   
   pre_tasks:
     - name: Debug survey variables

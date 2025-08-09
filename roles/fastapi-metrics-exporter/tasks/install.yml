@@ -34,7 +34,7 @@
     path: "{{ metrics_exporter_install_dir }}"
     state: absent
   become: yes
-  when: repo_exists.stat.exists and (update_existing | default(false) | bool)
+  when: repo_exists.stat.exists and (update_existing | default(false) | bool or force_reinstall | default(false) | bool)
 
 - name: Re-create directory after removal
   file:
@@ -44,7 +44,7 @@
     group: "{{ metrics_exporter_group }}"
     mode: '0755'
   become: yes
-  when: repo_exists.stat.exists and (update_existing | default(false) | bool)
+  when: repo_exists.stat.exists and (update_existing | default(false) | bool or force_reinstall | default(false) | bool)
 
 - name: Clone metrics-exporters repository
   git:
@@ -54,10 +54,27 @@
     force: yes
   become: yes
 
+- name: Remove broken virtual environment if it exists
+  file:
+    path: "{{ metrics_exporter_install_dir }}/venv"
+    state: absent
+  become: yes
+  when: need_venv_rebuild | default(false) | bool
+
 - name: Create Python virtual environment
   command: "{{ metrics_exporter_python_version }} -m venv {{ metrics_exporter_install_dir }}/venv"
   args:
-    creates: "{{ metrics_exporter_install_dir }}/venv"
+    creates: "{{ metrics_exporter_install_dir }}/venv/pyvenv.cfg"
+  become: yes
+  register: venv_creation
+
+- name: Set ownership of virtual environment
+  file:
+    path: "{{ metrics_exporter_install_dir }}/venv"
+    state: directory
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    recurse: yes
   become: yes
 
 - name: Upgrade pip in virtual environment
@@ -66,14 +83,30 @@
     state: latest
     virtualenv: "{{ metrics_exporter_install_dir }}/venv"
   become: yes
+  become_user: "{{ metrics_exporter_user }}"
 
 - name: Install Python requirements
   pip:
     requirements: "{{ metrics_exporter_install_dir }}/requirements.txt"
     virtualenv: "{{ metrics_exporter_install_dir }}/venv"
   become: yes
+  become_user: "{{ metrics_exporter_user }}"
+  register: pip_install_result
 
-- name: Set ownership of metrics exporter directory
+- name: Verify critical dependencies are installed
+  command: "{{ metrics_exporter_install_dir }}/venv/bin/python -c 'import uvicorn, fastapi, opentelemetry; print(\"All dependencies OK\")'"
+  register: dependency_verification
+  become: yes
+  become_user: "{{ metrics_exporter_user }}"
+  changed_when: false
+
+- name: Display dependency verification result
+  debug:
+    msg: |
+      Dependency Verification:
+      {{ dependency_verification.stdout }}
+
+- name: Set ownership of metrics exporter directory (final)
   file:
     path: "{{ metrics_exporter_install_dir }}"
     state: directory

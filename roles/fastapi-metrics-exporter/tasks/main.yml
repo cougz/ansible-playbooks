@@ -19,12 +19,11 @@
 - name: Test virtual environment functionality
   block:
     - name: Test if critical dependencies are importable
-      command: /opt/metrics-exporters/venv/bin/python -c "import uvicorn, fastapi, opentelemetry"
+      command: sudo -u otelcol /opt/metrics-exporters/venv/bin/python -c "import uvicorn, fastapi, opentelemetry"
       register: venv_functional_test
       failed_when: false
       changed_when: false
       become: yes
-      become_user: otelcol
   when: venv_exists.stat.exists
 
 - name: Set installation decision flags

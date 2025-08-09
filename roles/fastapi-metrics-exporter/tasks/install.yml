@@ -78,20 +78,12 @@
   become: yes
 
 - name: Upgrade pip in virtual environment
-  pip:
-    name: pip
-    state: latest
-    virtualenv: "{{ metrics_exporter_install_dir }}/venv"
+  command: sudo -u {{ metrics_exporter_user }} {{ metrics_exporter_install_dir }}/venv/bin/pip install --upgrade pip
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
 
 - name: Install Python requirements
-  pip:
-    requirements: "{{ metrics_exporter_install_dir }}/requirements.txt"
-    virtualenv: "{{ metrics_exporter_install_dir }}/venv"
+  command: sudo -u {{ metrics_exporter_user }} {{ metrics_exporter_install_dir }}/venv/bin/pip install -r {{ metrics_exporter_install_dir }}/requirements.txt
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
-  register: pip_install_result
 
 - name: Verify critical dependencies are installed
   command: "{{ metrics_exporter_install_dir }}/venv/bin/python -c 'import uvicorn, fastapi, opentelemetry; print(\"All dependencies OK\")'"

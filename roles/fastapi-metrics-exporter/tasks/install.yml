@@ -86,10 +86,9 @@
   become: yes
 
 - name: Verify critical dependencies are installed
-  command: "{{ metrics_exporter_install_dir }}/venv/bin/python -c 'import uvicorn, fastapi, opentelemetry; print(\"All dependencies OK\")'"
+  command: sudo -u {{ metrics_exporter_user }} {{ metrics_exporter_install_dir }}/venv/bin/python -c 'import uvicorn, fastapi, opentelemetry; print("All dependencies OK")'
   register: dependency_verification
   become: yes
-  become_user: "{{ metrics_exporter_user }}"
   changed_when: false
 
 - name: Display dependency verification result

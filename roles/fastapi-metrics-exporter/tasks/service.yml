@@ -24,7 +24,7 @@
 
 - name: Wait for service to be ready
   wait_for:
-    port: 8000
+    port: "{{ metrics_exporter_port }}"
     host: "{{ ansible_default_ipv4.address }}"
     delay: 5
     timeout: 30

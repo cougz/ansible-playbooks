@@ -10,9 +10,10 @@ metrics_exporter_python_version: "python3"
 # Service configuration
 metrics_exporter_service_name: "metrics-exporter"
 metrics_exporter_service_description: "Metrics Exporter (OTLP Only)"
+metrics_exporter_port: 9100
 
 # OTLP Configuration
-otlp_endpoint: "infra-metrics1.home.seiffert.me:4317"
+otlp_endpoint: "localhost:4317"  # Default to localhost - should be overridden in inventory/surveys
 service_name: "metrics-exporter"
 service_version: "1.0.0"
 otlp_insecure: "true"

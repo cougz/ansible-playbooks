@@ -7,7 +7,7 @@ Type=simple
 User={{ metrics_exporter_user }}
 Group={{ metrics_exporter_group }}
 WorkingDirectory={{ metrics_exporter_install_dir }}
-ExecStart={{ metrics_exporter_install_dir }}/venv/bin/python {{ metrics_exporter_install_dir }}/main.py
+ExecStart={{ metrics_exporter_install_dir }}/venv/bin/python {{ metrics_exporter_install_dir }}/start_with_compatibility.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONPATH={{ metrics_exporter_install_dir }}
@@ -22,6 +22,10 @@ Environment=OTLP_INSECURE={{ otlp_insecure }}
 Environment=COLLECTION_INTERVAL={{ collection_interval }}
 Environment=ENABLED_COLLECTORS_STR={{ enabled_collectors }}
 Environment=LOG_LEVEL={{ log_level }}
+
+# Filesystem exclusions (for Proxmox v9 compatibility)
+Environment=FILESYSTEM_EXCLUDE_PATHS={{ filesystem_exclude_paths }}
+Environment=FILESYSTEM_EXCLUDE_TYPES={{ filesystem_exclude_types }}
 
 # Resource limits
 LimitNOFILE=65536

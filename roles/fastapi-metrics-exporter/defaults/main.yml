@@ -21,3 +21,7 @@ otlp_insecure: "true"
 collection_interval: 30
 enabled_collectors: "memory,cpu,filesystem,network,process"
 log_level: "INFO"
+
+# Filesystem exclusions (for Proxmox v9 compatibility)
+filesystem_exclude_paths: "/sys/kernel/debug,/proc/sys/fs/binfmt_misc"
+filesystem_exclude_types: "debugfs,binfmt_misc,tmpfs,devtmpfs,sysfs,proc"

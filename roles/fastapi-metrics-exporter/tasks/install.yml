@@ -85,6 +85,33 @@
   command: sudo -u {{ metrics_exporter_user }} {{ metrics_exporter_install_dir }}/venv/bin/pip install -r {{ metrics_exporter_install_dir }}/requirements.txt
   become: yes
 
+- name: Deploy safe filesystem collector module
+  template:
+    src: safe_filesystem_collector.py
+    dest: "{{ metrics_exporter_install_dir }}/safe_filesystem_collector.py"
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    mode: '0644'
+  become: yes
+
+- name: Create filesystem compatibility initialization script
+  template:
+    src: init_compatibility.py
+    dest: "{{ metrics_exporter_install_dir }}/init_compatibility.py"
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    mode: '0644'
+  become: yes
+
+- name: Create compatibility wrapper script
+  template:
+    src: start_with_compatibility.py
+    dest: "{{ metrics_exporter_install_dir }}/start_with_compatibility.py"
+    owner: "{{ metrics_exporter_user }}"
+    group: "{{ metrics_exporter_group }}"
+    mode: '0755'
+  become: yes
+
 - name: Verify critical dependencies are installed
   command: sudo -u {{ metrics_exporter_user }} {{ metrics_exporter_install_dir }}/venv/bin/python -c 'import uvicorn, fastapi, opentelemetry; print("All dependencies OK")'
   register: dependency_verification

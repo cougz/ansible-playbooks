@@ -1,0 +1,25 @@
+---
+galaxy_info:
+  role_name: fastapi-metrics-exporter
+  description: Install and configure FastAPI-based metrics exporter with OTLP support
+  author: Infrastructure Team
+  license: MIT
+  min_ansible_version: 2.9
+  
+  platforms:
+    - name: Debian
+      versions:
+        - 11
+        - 12
+        - 13
+    - name: Ubuntu
+      versions:
+        - 20.04
+        - 22.04
+        - 24.04
+
+dependencies: 
+  - role: common
+
+collections:
+  - ansible.builtin

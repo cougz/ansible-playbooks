@@ -1,0 +1,21 @@
+---
+- name: Final status message for install/update operations
+  debug:
+    msg: |
+      ==========================================
+      {{ action_type | title }} operation completed successfully!
+      ==========================================
+      Component: {{ component_selection }}
+      Host: {{ inventory_hostname }}
+      Platform: {{ ansible_distribution }} {{ ansible_distribution_version }}
+      
+      {% if action_type in ['install', 'update', 'reinstall'] and install_metrics_exporter | bool %}
+      Metrics Exporter (FastAPI):
+      - Status: Running
+      - Service: metrics-exporter
+      - OTLP Endpoint: Configured
+      {% endif %}
+      ==========================================
+  when: 
+    - not perform_uninstall | bool
+    - show_final_status | bool

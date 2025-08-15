@@ -1,0 +1,17 @@
+---
+# Production environment overrides
+
+# OTLP Configuration for production
+otlp_endpoint: "metrics-collector.internal:4317"
+service_name: "metrics-exporter"
+service_version: "1.0.0"
+otlp_insecure: "false"  # Use secure connections in production
+
+# Collection settings for production
+collection_interval: 30
+log_level: "INFO"
+
+# Production-specific display settings
+show_debug_output: false
+show_survey_variables: false
+show_derived_flags: false

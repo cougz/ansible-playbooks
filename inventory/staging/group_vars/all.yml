@@ -1,0 +1,17 @@
+---
+# Staging environment overrides
+
+# OTLP Configuration for staging
+otlp_endpoint: "metrics-staging.internal:4317"
+service_name: "metrics-exporter-staging"
+service_version: "1.0.0-staging"
+otlp_insecure: "true"  # Allow insecure connections in staging
+
+# Collection settings for staging
+collection_interval: 15  # More frequent collection for testing
+log_level: "DEBUG"
+
+# Staging-specific display settings (show more debug info)
+show_debug_output: true
+show_survey_variables: true
+show_derived_flags: true

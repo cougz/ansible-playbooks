@@ -1,0 +1,46 @@
+---
+# Global defaults for all hosts
+# These can be overridden in group_vars or host_vars
+
+# Metrics Exporter Configuration
+metrics_exporter_defaults:
+  version: "main"
+  repo: "https://github.com/cougz/metrics-exporters.git"
+  install_dir: "/opt/metrics-exporters"
+  user: "otelcol"
+  group: "otelcol"
+  port: 9100
+  python_version: "python3"
+
+# Service Configuration  
+service_defaults:
+  name: "metrics-exporter"
+  description: "Metrics Exporter (OTLP Only)"
+  restart_policy: "on-failure"
+  restart_sec: 5
+
+# OTLP Configuration (should be overridden per environment)
+otlp_defaults:
+  endpoint: "localhost:4317"  # Override in environment-specific vars
+  service_name: "metrics-exporter"
+  service_version: "1.0.0"
+  insecure: "true"
+
+# Collection Settings
+collection_defaults:
+  interval: 30
+  enabled_collectors: "memory,cpu,filesystem,network,process"
+  log_level: "INFO"
+
+# Filesystem exclusions (for Proxmox v9 compatibility)
+filesystem_defaults:
+  exclude_paths: "/sys/kernel/debug,/proc/sys/fs/binfmt_misc"
+  exclude_types: "debugfs,binfmt_misc,tmpfs,devtmpfs,sysfs,proc"
+
+# Debug/Display Configuration
+display_defaults:
+  show_debug_output: true
+  show_survey_variables: true
+  show_execution_plan: true
+  show_derived_flags: true
+  show_final_status: true

@@ -1,0 +1,12 @@
+---
+# Proxmox-specific configuration for production
+
+# Enhanced filesystem exclusions for Proxmox hosts
+filesystem_exclude_paths: "/sys/kernel/debug,/proc/sys/fs/binfmt_misc,/dev,/proc,/sys"
+filesystem_exclude_types: "debugfs,binfmt_misc,tmpfs,devtmpfs,sysfs,proc,devfs"
+
+# Proxmox-specific collectors
+enabled_collectors: "memory,cpu,filesystem,network,process,zfs,sensors"
+
+# Service name with host identification
+service_name: "metrics-exporter-pve"

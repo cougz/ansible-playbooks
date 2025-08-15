@@ -1,0 +1,7 @@
+---
+# Configuration and display defaults
+show_debug_output: true
+show_survey_variables: true
+show_execution_plan: true
+show_derived_flags: true
+show_final_status: true

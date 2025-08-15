@@ -1,0 +1,11 @@
+---
+# Uninstall role defaults
+metrics_exporter_service_name: "metrics-exporter"
+metrics_exporter_install_dir: "/opt/metrics-exporters"
+metrics_exporter_user: "otelcol"
+metrics_exporter_group: "otelcol"
+
+# Uninstall behavior
+force_removal: false  # Whether to remove user/group even if other services use them
+remove_user: false    # Set to true to remove the otelcol user
+remove_group: false   # Set to true to remove the otelcol group

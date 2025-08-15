@@ -1,0 +1,24 @@
+---
+galaxy_info:
+  role_name: metrics-exporter-uninstall
+  description: Clean uninstall of FastAPI metrics exporter
+  author: Infrastructure Team
+  license: MIT
+  min_ansible_version: 2.9
+  
+  platforms:
+    - name: Debian
+      versions:
+        - 11
+        - 12
+        - 13
+    - name: Ubuntu
+      versions:
+        - 20.04
+        - 22.04
+        - 24.04
+
+dependencies: []
+
+collections:
+  - ansible.builtin

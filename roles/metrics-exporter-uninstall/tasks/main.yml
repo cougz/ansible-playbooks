@@ -1,0 +1,96 @@
+---
+- name: Stop Metrics Exporter service
+  ansible.builtin.systemd:
+    name: "{{ metrics_exporter_service_name }}"
+    state: stopped
+    enabled: no
+  become: yes
+  ignore_errors: yes
+
+- name: Remove Metrics Exporter systemd service file
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ metrics_exporter_service_name }}.service"
+    state: absent
+  become: yes
+
+- name: Remove Metrics Exporter installation directory
+  ansible.builtin.file:
+    path: "{{ metrics_exporter_install_dir }}"
+    state: absent
+  become: yes
+
+- name: Reload systemd daemon after service removal
+  ansible.builtin.systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Check if otelcol user has running processes
+  ansible.builtin.shell: |
+    ps -u {{ metrics_exporter_user }} -o pid= 2>/dev/null | wc -l
+  register: otelcol_processes
+  become: yes
+  ignore_errors: yes
+  when: force_removal | bool or remove_user | bool
+
+- name: Remove otelcol user (when configured)
+  ansible.builtin.user:
+    name: "{{ metrics_exporter_user }}"
+    state: absent
+    remove: yes
+    force: yes
+  become: yes
+  when: 
+    - remove_user | bool or force_removal | bool
+    - (otelcol_processes.stdout | default('0') | int) == 0
+  ignore_errors: yes
+
+- name: Remove otelcol group (when configured)
+  ansible.builtin.group:
+    name: "{{ metrics_exporter_group }}"
+    state: absent
+  become: yes
+  when: remove_group | bool or force_removal | bool
+  ignore_errors: yes
+
+- name: Clean up any remaining temp files
+  ansible.builtin.find:
+    paths:
+      - /tmp
+      - /var/tmp
+    patterns:
+      - "metrics-exporter*"
+      - "{{ metrics_exporter_service_name }}*"
+    file_type: file
+    age: "1d"
+  register: temp_files
+  become: yes
+
+- name: Remove temp files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  become: yes
+  loop: "{{ temp_files.files | default([]) }}"
+  ignore_errors: yes
+
+- name: Display uninstall summary
+  debug:
+    msg: |
+      ==========================================
+      Uninstall Summary for {{ inventory_hostname }}
+      ==========================================
+      
+      Component Removed: Metrics Exporter (FastAPI)
+      - Service: {{ metrics_exporter_service_name }}
+      - Install: {{ metrics_exporter_install_dir }}
+      
+      {% if force_removal or remove_user or remove_group %}
+      User/Group Removal:
+      - {{ metrics_exporter_user }} user: {{ 'Removed' if (remove_user or force_removal) and (otelcol_processes.stdout | default('0') | int) == 0 else 'Skipped' }}
+      - {{ metrics_exporter_group }} group: {{ 'Removed' if (remove_group or force_removal) else 'Skipped' }}
+      {% else %}
+      User/Group Status:
+      - {{ metrics_exporter_user }}/{{ metrics_exporter_group }}: Preserved (set remove_user/remove_group=true to remove)
+      {% endif %}
+      
+      ==========================================

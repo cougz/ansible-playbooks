@@ -68,117 +68,16 @@
           install_metrics_exporter: {{ install_metrics_exporter }}
           ==========================================
 
-  tasks:
-    # ===================
-    # UNINSTALL TASKS
-    # ===================
-    
-    - name: "UNINSTALL: Stop Metrics Exporter service"
-      ansible.builtin.systemd:
-        name: metrics-exporter
-        state: stopped
-        enabled: no
-      become: yes
-      ignore_errors: yes
-      when: perform_uninstall | bool and install_metrics_exporter | bool
-      
-    - name: "UNINSTALL: Remove Metrics Exporter systemd service file"
-      ansible.builtin.file:
-        path: /etc/systemd/system/metrics-exporter.service
-        state: absent
-      become: yes
-      when: perform_uninstall | bool and install_metrics_exporter | bool
-    
-    - name: "UNINSTALL: Remove Metrics Exporter installation directory"
-      ansible.builtin.file:
-        path: /opt/metrics-exporters
-        state: absent
-      become: yes
-      when: perform_uninstall | bool and install_metrics_exporter | bool
-    
-    - name: "UNINSTALL: Reload systemd daemon after service removal"
-      ansible.builtin.systemd:
-        daemon_reload: yes
-      become: yes
-      when: perform_uninstall | bool
-    
-    - name: "UNINSTALL: Check if otelcol user has running processes"
-      ansible.builtin.shell: |
-        ps -u otelcol -o pid= 2>/dev/null | wc -l
-      register: otelcol_processes
-      become: yes
-      ignore_errors: yes
-      when: perform_uninstall | bool and force_removal | bool
-    
-    - name: "UNINSTALL: Remove otelcol user (when force_removal is true)"
-      ansible.builtin.user:
-        name: otelcol
-        state: absent
-        remove: yes
-        force: yes
-      become: yes
-      when: 
-        - perform_uninstall | bool
-        - force_removal | bool
-        - (otelcol_processes.stdout | default('0') | int) == 0
-      ignore_errors: yes
-    
-    - name: "UNINSTALL: Remove otelcol group (when force_removal is true)"
-      ansible.builtin.group:
-        name: otelcol
-        state: absent
-      become: yes
-      when: 
-        - perform_uninstall | bool
-        - force_removal | bool
-      ignore_errors: yes
-    
-    - name: "UNINSTALL: Clean up any remaining temp files"
-      ansible.builtin.find:
-        paths:
-          - /tmp
-          - /var/tmp
-        patterns:
-          - "metrics-exporter*"
-        file_type: file
-        age: "1d"
-      register: temp_files
-      become: yes
-      when: perform_uninstall | bool
-    
-    - name: "UNINSTALL: Remove temp files"
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: absent
-      become: yes
-      loop: "{{ temp_files.files | default([]) }}"
-      ignore_errors: yes
-      when: perform_uninstall | bool
-    
-    - name: "UNINSTALL: Display uninstall summary"
-      debug:
-        msg: |
-          ==========================================
-          Uninstall Summary for {{ inventory_hostname }}
-          ==========================================
-          
-          Component Removed: Metrics Exporter (FastAPI)
-          - Service: metrics-exporter
-          - Install: /opt/metrics-exporters/
-          
-          {% if force_removal %}
-          User/Group Removal:
-          - otelcol user: {{ 'Removed' if (otelcol_processes.stdout | default('0') | int) == 0 else 'Skipped (processes running)' }}
-          - otelcol group: Attempted removal
-          {% else %}
-          User/Group Status:
-          - otelcol user/group: Preserved (set force_removal=true to remove)
-          {% endif %}
-          
-          ==========================================
-      when: perform_uninstall | bool
+  tasks: []  # All logic moved to roles
 
   roles:
+    # Uninstall role (run first if uninstalling)
+    - role: roles/metrics-exporter-uninstall
+      when: perform_uninstall | bool and install_metrics_exporter | bool
+      vars:
+        remove_user: "{{ force_removal | default(false) }}"
+        remove_group: "{{ force_removal | default(false) }}"
+    
     # Common setup tasks (only run when NOT uninstalling)
     - role: roles/common
       when: not perform_uninstall | bool and install_metrics_exporter | bool

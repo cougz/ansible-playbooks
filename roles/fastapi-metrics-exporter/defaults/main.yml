@@ -1,7 +1,7 @@
 ---
 # FastAPI Metrics Exporter defaults
 metrics_exporter_version: "main"  # or specify a tag/commit
-metrics_exporter_repo: "https://github.com/cougz/metrics-exporters.git"
+metrics_exporter_repo: "https://github.com/cougz/metrics-exporter.git"
 metrics_exporter_install_dir: "/opt/metrics-exporters"
 metrics_exporter_user: "otelcol"
 metrics_exporter_group: "otelcol"
